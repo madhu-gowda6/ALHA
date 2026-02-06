@@ -25,11 +25,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. WHEN a farmer uploads a livestock photo, THE Disease_Detection_Engine SHALL analyze the image within 30 seconds
-2. WHEN analyzing livestock images, THE Disease_Detection_Engine SHALL identify disease patterns in eyes, skin, posture, and udder regions
-3. WHEN disease patterns are detected, THE Disease_Detection_Engine SHALL generate explanations in simple Hindi or English
-4. WHEN image quality is insufficient, THE Disease_Detection_Engine SHALL request a clearer photo with specific guidance
-5. WHERE multiple symptoms are present, THE Disease_Detection_Engine SHALL prioritize the most critical conditions first
+1.1 WHEN a farmer uploads a livestock photo, THEN the Disease_Detection_Engine analyzes the image within 30 seconds
+
+1.2 WHEN analyzing livestock images, THEN the Disease_Detection_Engine identifies disease patterns in eyes, skin, posture, and udder regions
+
+1.3 WHEN disease patterns are detected, THEN the Disease_Detection_Engine generates explanations in simple Hindi or English
+
+1.4 WHEN image quality is insufficient, THEN the Disease_Detection_Engine requests a clearer photo with specific guidance
+
+1.5 WHEN multiple symptoms are present, THEN the Disease_Detection_Engine prioritizes the most critical conditions first
 
 ### Requirement 2: Intelligent Conversational Assistant
 
@@ -37,11 +41,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE Conversational_Assistant SHALL support voice and text input in 8+ Indian languages
-2. WHEN a farmer asks about feeding schedules, THE Conversational_Assistant SHALL provide species-specific recommendations
-3. WHEN a farmer inquires about vaccination schedules, THE Conversational_Assistant SHALL provide timely reminders and guidance
-4. WHEN interpreting symptoms, THE Conversational_Assistant SHALL maintain context across multiple conversation turns
-5. WHILE engaged in conversation, THE Conversational_Assistant SHALL respond within 5 seconds for optimal user experience
+2.1 The Conversational_Assistant supports voice and text input in 8+ Indian languages
+
+2.2 WHEN a farmer asks about feeding schedules, THEN the Conversational_Assistant provides species-specific recommendations
+
+2.3 WHEN a farmer inquires about vaccination schedules, THEN the Conversational_Assistant provides timely reminders and guidance
+
+2.4 WHEN interpreting symptoms, THEN the Conversational_Assistant maintains context across multiple conversation turns
+
+2.5 WHEN engaged in conversation, THEN the Conversational_Assistant responds within 5 seconds for optimal user experience
 
 ### Requirement 3: Veterinary Knowledge Base Integration
 
@@ -49,11 +57,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE Knowledge_Base SHALL ingest veterinary literature from ICAR and NDDB sources
-2. WHEN providing medical information, THE Knowledge_Base SHALL include source citations
-3. WHEN uncertain about medical advice, THE Knowledge_Base SHALL explicitly state limitations and recommend veterinary consultation
-4. THE Knowledge_Base SHALL update veterinary information monthly to maintain accuracy
-5. WHEN conflicting information exists, THE Knowledge_Base SHALL present the most recent and authoritative guidance
+3.1 The Knowledge_Base ingests veterinary literature from ICAR and NDDB sources
+
+3.2 WHEN providing medical information, THEN the Knowledge_Base includes source citations
+
+3.3 WHEN uncertain about medical advice, THEN the Knowledge_Base explicitly states limitations and recommends veterinary consultation
+
+3.4 The Knowledge_Base updates veterinary information monthly to maintain accuracy
+
+3.5 WHEN conflicting information exists, THEN the Knowledge_Base presents the most recent and authoritative guidance
 
 ### Requirement 4: Autonomous Veterinary Coordination
 
@@ -61,11 +73,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. WHEN a critical case is identified, THE Vet_Coordination_Agent SHALL determine the required veterinary specialist type
-2. WHEN searching for veterinarians, THE Vet_Coordination_Agent SHALL find professionals within 50km radius
-3. WHEN veterinarians are found, THE Vet_Coordination_Agent SHALL check their availability status
-4. WHEN available veterinarians are identified, THE Vet_Coordination_Agent SHALL send SMS alerts to both farmer and veterinarian
-5. IF no veterinarians are available, THEN THE Vet_Coordination_Agent SHALL provide emergency care instructions and escalate to regional veterinary services
+4.1 WHEN a critical case is identified, THEN the Vet_Coordination_Agent determines the required veterinary specialist type
+
+4.2 WHEN searching for veterinarians, THEN the Vet_Coordination_Agent finds professionals within 50km radius
+
+4.3 WHEN veterinarians are found, THEN the Vet_Coordination_Agent checks their availability status
+
+4.4 WHEN available veterinarians are identified, THEN the Vet_Coordination_Agent sends SMS alerts to both farmer and veterinarian
+
+4.5 IF no veterinarians are available, THEN the Vet_Coordination_Agent provides emergency care instructions and escalates to regional veterinary services
 
 ### Requirement 5: Safety and Compliance Framework
 
@@ -73,11 +89,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL filter all content for inappropriate medical advice using safety guardrails
-2. WHEN processing farmer data, THE ALHA_System SHALL detect and redact personally identifiable information
-3. WHEN providing medical advice, THE ALHA_System SHALL include appropriate disclaimers about veterinary consultation
-4. WHEN critical cases are identified, THE ALHA_System SHALL escalate to human veterinary professionals
-5. THE ALHA_System SHALL log all medical recommendations for audit and quality assurance purposes
+5.1 The system filters all content for inappropriate medical advice using safety guardrails
+
+5.2 WHEN processing farmer data, THEN the system detects and redacts personally identifiable information
+
+5.3 WHEN providing medical advice, THEN the system includes appropriate disclaimers about veterinary consultation
+
+5.4 WHEN critical cases are identified, THEN the system escalates to human veterinary professionals
+
+5.5 The system logs all medical recommendations for audit and quality assurance purposes
 
 ### Requirement 6: Mobile-Friendly User Interface
 
@@ -85,11 +105,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL provide a responsive Flutter web application optimized for mobile devices
-2. WHEN network connectivity is poor, THE ALHA_System SHALL cache essential features for offline use
-3. WHEN using voice input, THE ALHA_System SHALL utilize browser-based speech recognition APIs
-4. THE ALHA_System SHALL support touch-friendly interfaces with large buttons and clear navigation
-5. WHEN loading content, THE ALHA_System SHALL display progress indicators and estimated completion times
+6.1 The system provides a responsive Flutter web application optimized for mobile devices
+
+6.2 WHEN network connectivity is poor, THEN the system caches essential features for offline use
+
+6.3 WHEN using voice input, THEN the system utilizes browser-based speech recognition APIs
+
+6.4 The system supports touch-friendly interfaces with large buttons and clear navigation
+
+6.5 WHEN loading content, THEN the system displays progress indicators and estimated completion times
 
 ### Requirement 7: Multi-Language Support System
 
@@ -97,11 +121,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL support text and voice input in Hindi, English, and 6+ regional Indian languages
-2. WHEN switching languages, THE ALHA_System SHALL maintain conversation context and history
-3. WHEN translating medical terms, THE ALHA_System SHALL use locally appropriate terminology
-4. THE ALHA_System SHALL detect the farmer's preferred language automatically from initial input
-5. WHERE language detection is uncertain, THE ALHA_System SHALL prompt the farmer to select their preferred language
+7.1 The system supports text and voice input in Hindi, English, and 6+ regional Indian languages
+
+7.2 WHEN switching languages, THEN the system maintains conversation context and history
+
+7.3 WHEN translating medical terms, THEN the system uses locally appropriate terminology
+
+7.4 The system detects the farmer's preferred language automatically from initial input
+
+7.5 WHEN language detection is uncertain, THEN the system prompts the farmer to select their preferred language
 
 ### Requirement 8: Data Storage and User Management
 
@@ -109,11 +137,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL store user profiles and consultation history in encrypted format
-2. WHEN farmers create accounts, THE ALHA_System SHALL require minimal personal information for accessibility
-3. WHEN storing livestock data, THE ALHA_System SHALL organize information by animal and health condition
-4. THE ALHA_System SHALL retain consultation history for 2 years for health tracking purposes
-5. WHEN farmers request data deletion, THE ALHA_System SHALL comply within 30 days while preserving anonymized research data
+8.1 The system stores user profiles and consultation history in encrypted format
+
+8.2 WHEN farmers create accounts, THEN the system requires minimal personal information for accessibility
+
+8.3 WHEN storing livestock data, THEN the system organizes information by animal and health condition
+
+8.4 The system retains consultation history for 2 years for health tracking purposes
+
+8.5 WHEN farmers request data deletion, THEN the system complies within 30 days while preserving anonymized research data
 
 ### Requirement 9: Image Processing and Analysis Pipeline
 
@@ -121,11 +153,15 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL accept image uploads in common mobile formats (JPEG, PNG, HEIC)
-2. WHEN processing images, THE ALHA_System SHALL automatically enhance image quality for better analysis
-3. WHEN analyzing livestock photos, THE ALHA_System SHALL focus on key diagnostic areas (eyes, skin, posture, udder)
-4. THE ALHA_System SHALL process and analyze uploaded images within 30 seconds
-5. WHEN image analysis is complete, THE ALHA_System SHALL provide confidence scores for detected conditions
+9.1 The system accepts image uploads in common mobile formats (JPEG, PNG, HEIC)
+
+9.2 WHEN processing images, THEN the system automatically enhances image quality for better analysis
+
+9.3 WHEN analyzing livestock photos, THEN the system focuses on key diagnostic areas (eyes, skin, posture, udder)
+
+9.4 The system processes and analyzes uploaded images within 30 seconds
+
+9.5 WHEN image analysis is complete, THEN the system provides confidence scores for detected conditions
 
 ### Requirement 10: Notification and Alert System
 
@@ -133,8 +169,12 @@ The AI-Powered Livestock Health Assistant (ALHA) is a mobile-friendly, voice-ena
 
 #### Acceptance Criteria
 
-1. THE ALHA_System SHALL send SMS notifications for critical health alerts
-2. WHEN vaccination schedules are due, THE ALHA_System SHALL send reminders 7 days in advance
-3. WHEN veterinary appointments are scheduled, THE ALHA_System SHALL send confirmation messages to both parties
-4. THE ALHA_System SHALL allow farmers to customize notification preferences and frequency
-5. WHEN emergency situations arise, THE ALHA_System SHALL send immediate alerts with priority routing
+10.1 The system sends SMS notifications for critical health alerts
+
+10.2 WHEN vaccination schedules are due, THEN the system sends reminders 7 days in advance
+
+10.3 WHEN veterinary appointments are scheduled, THEN the system sends confirmation messages to both parties
+
+10.4 The system allows farmers to customize notification preferences and frequency
+
+10.5 WHEN emergency situations arise, THEN the system sends immediate alerts with priority routing
