@@ -1,0 +1,26 @@
+name: alha
+description: ALHA - AI Livestock Health Assistant PWA
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.4.0
+  web_socket_channel: ^2.4.0
+  http: ^1.2.0
+  shared_preferences: ^2.2.0
+  image_picker: ^1.0.0
+  speech_to_text: ^6.6.0
+  google_fonts: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

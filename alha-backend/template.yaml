@@ -1,0 +1,612 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ALHA - AI Livestock Health Assistant Infrastructure
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        CONSULTATIONS_TABLE: !Ref ConsultationsTable
+        VETS_TABLE: !Ref VetsTable
+        FARMERS_TABLE: !Ref FarmersTable
+        DISEASE_MODELS_TABLE: !Ref DiseaseModelsTable
+        S3_IMAGE_BUCKET: !Ref ImagesBucket
+        AWS_ACCOUNT_ID: !Ref AWS::AccountId
+
+# ──────────────────────────────────────────────────────────
+# PARAMETERS
+# ──────────────────────────────────────────────────────────
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+
+# ──────────────────────────────────────────────────────────
+# RESOURCES
+# ──────────────────────────────────────────────────────────
+Resources:
+
+  # ── DynamoDB Tables ──────────────────────────────────────
+
+  ConsultationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alha-consultations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+        - AttributeName: farmer_phone
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: gsi-farmer-phone
+          KeySchema:
+            - AttributeName: farmer_phone
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  VetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alha-vets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: vet_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: vet_id
+          KeyType: HASH
+
+  FarmersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alha-farmers
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phone_number
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phone_number
+          KeyType: HASH
+
+  DiseaseModelsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alha-disease-models
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: animal_type
+          AttributeType: S
+      KeySchema:
+        - AttributeName: animal_type
+          KeyType: HASH
+
+  # ── S3 Buckets ───────────────────────────────────────────
+
+  ImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: alha-images
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Suspended
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: alha-frontend
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::alha-frontend/*'
+
+  # ── Cognito ──────────────────────────────────────────────
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: alha-user-pool
+      UsernameAttributes:
+        - phone_number
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: false
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+      Schema:
+        - Name: phone_number
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: language_preference
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: alha-app-client
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # ── IAM Roles ────────────────────────────────────────────
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: alha-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: alha-lambda-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminInitiateAuth
+                Resource: '*'
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: alha-ecs-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: alha-ecs-task-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - rekognition:DetectCustomLabels
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: alha-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ── API Gateway HTTP API ─────────────────────────────────
+
+  AlhaHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
+              audience:
+                - !Ref CognitoUserPoolClient
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - '*'
+        AllowMethods:
+          - '*'
+
+  # ── Lambda Functions (Stub) ──────────────────────────────
+
+  ImageValidatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: alha-image-validator
+      CodeUri: functions/image_validator/
+      Handler: app.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        UploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AlhaHttpApi
+            Path: /api/upload-url
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  DiseaseClassifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: alha-disease-classifier
+      CodeUri: functions/disease_classifier/
+      Handler: app.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+  NotificationHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: alha-notification-handler
+      CodeUri: functions/notification_handler/
+      Handler: app.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        History:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AlhaHttpApi
+            Path: /api/history
+            Method: GET
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  AuthLoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: alha-auth-login
+      CodeUri: functions/notification_handler/
+      Handler: app.auth_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Login:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AlhaHttpApi
+            Path: /api/auth/login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  # ── VPC & Networking ─────────────────────────────────────
+
+  AlhaVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: alha-vpc
+
+  AlhaSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AlhaVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: alha-subnet-a
+
+  AlhaSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AlhaVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: alha-subnet-b
+
+  AlhaInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: alha-igw
+
+  AlhaVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref AlhaVPC
+      InternetGatewayId: !Ref AlhaInternetGateway
+
+  AlhaRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AlhaVPC
+      Tags:
+        - Key: Name
+          Value: alha-rt
+
+  AlhaPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AlhaVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref AlhaRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref AlhaInternetGateway
+
+  AlhaSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AlhaSubnetA
+      RouteTableId: !Ref AlhaRouteTable
+
+  AlhaSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AlhaSubnetB
+      RouteTableId: !Ref AlhaRouteTable
+
+  # ── Security Groups ──────────────────────────────────────
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB security group — allow HTTP/HTTPS inbound
+      VpcId: !Ref AlhaVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: alha-alb-sg
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Fargate task security group
+      VpcId: !Ref AlhaVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: alha-ecs-sg
+
+  # ── ECR Repository ───────────────────────────────────────
+
+  AgentECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: alha-agent
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ── Application Load Balancer ────────────────────────────
+
+  AlhaALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: alha-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref AlhaSubnetA
+        - !Ref AlhaSubnetB
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  AlhaTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: alha-tg
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref AlhaVPC
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  AlhaALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlhaALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AlhaTargetGroup
+
+  # ── ECS Cluster & Service ────────────────────────────────
+
+  AlhaECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: alha-cluster
+
+  AlhaTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: alha-agent
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: alha-agent
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/alha-agent:latest'
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/alha-agent
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: CLAUDE_CODE_USE_BEDROCK
+              Value: '1'
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CONSULTATIONS_TABLE
+              Value: alha-consultations
+            - Name: VETS_TABLE
+              Value: alha-vets
+            - Name: FARMERS_TABLE
+              Value: alha-farmers
+            - Name: DISEASE_MODELS_TABLE
+              Value: alha-disease-models
+            - Name: S3_IMAGE_BUCKET
+              Value: alha-images
+            - Name: REKOGNITION_CATTLE_ARN
+              Value: '<placeholder>'
+            - Name: REKOGNITION_POULTRY_ARN
+              Value: '<placeholder>'
+            - Name: BEDROCK_KB_ID
+              Value: '<placeholder>'
+            - Name: ANTHROPIC_CUSTOM_HEADERS
+              Value: 'X-Amzn-Bedrock-GuardrailIdentifier:<id>\nX-Amzn-Bedrock-GuardrailVersion:1'
+
+  AlhaECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/alha-agent
+      RetentionInDays: 7
+
+  AlhaECSService:
+    Type: AWS::ECS::Service
+    DependsOn: AlhaALBListener
+    Properties:
+      ServiceName: alha-agent-service
+      Cluster: !Ref AlhaECSCluster
+      TaskDefinition: !Ref AlhaTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref AlhaSubnetA
+            - !Ref AlhaSubnetB
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: alha-agent
+          ContainerPort: 8000
+          TargetGroupArn: !Ref AlhaTargetGroup
+
+# ──────────────────────────────────────────────────────────
+# OUTPUTS
+# ──────────────────────────────────────────────────────────
+Outputs:
+  ApiGatewayUrl:
+    Description: API Gateway URL
+    Value: !Sub 'https://${AlhaHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+
+  CognitoClientId:
+    Description: Cognito App Client ID
+    Value: !Ref CognitoUserPoolClient
+
+  ImagesBucketName:
+    Description: S3 bucket for animal images
+    Value: !Ref ImagesBucket
+
+  FrontendBucketWebsiteUrl:
+    Description: S3 static website URL for Flutter PWA
+    Value: !GetAtt FrontendBucket.WebsiteURL
+
+  ALBDNSName:
+    Description: ALB DNS name for agent service
+    Value: !GetAtt AlhaALB.DNSName
+
+  ECRRepositoryUri:
+    Description: ECR repository URI for alha-agent image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/alha-agent'
+
+  ECSClusterName:
+    Description: ECS Cluster name
+    Value: !Ref AlhaECSCluster
