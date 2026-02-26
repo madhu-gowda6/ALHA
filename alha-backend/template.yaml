@@ -417,7 +417,7 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ALB security group — allow HTTP/HTTPS inbound
+      GroupDescription: ALB security group - allow HTTP/HTTPS inbound
       VpcId: !Ref AlhaVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -565,7 +565,7 @@ Resources:
       ServiceName: alha-agent-service
       Cluster: !Ref AlhaECSCluster
       TaskDefinition: !Ref AlhaTaskDefinition
-      DesiredCount: 1
+      DesiredCount: 0
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
