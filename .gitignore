@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+htmlcov/
+.mypy_cache/
+
+# Dart / Flutter
+alha/.dart_tool/
+alha/.flutter-plugins
+alha/.flutter-plugins-dependencies
+alha/.packages
+alha/.pub-cache/
+alha/.pub/
+alha/build/
+alha/*.iml
+
+# AWS SAM
+alha-backend/.aws-sam/
+alha-backend/samconfig.toml
+*.jar
+
+# Environment variables — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Docker
+*.tar.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
