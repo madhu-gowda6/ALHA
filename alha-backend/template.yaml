@@ -15,6 +15,8 @@ Globals:
         DISEASE_MODELS_TABLE: !Ref DiseaseModelsTable
         S3_IMAGE_BUCKET: !Ref ImagesBucket
         AWS_ACCOUNT_ID: !Ref AWS::AccountId
+        COGNITO_CLIENT_ID: !Ref CognitoUserPoolClient
+        COGNITO_USER_POOL_ID: !Ref CognitoUserPool
 
 # ──────────────────────────────────────────────────────────
 # PARAMETERS
@@ -94,7 +96,6 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: alha-images
-      AccessControl: Private
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -133,8 +134,8 @@ Resources:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: alha-user-pool
-      UsernameAttributes:
-        - phone_number
+      # No UsernameAttributes — use free-form username (raju/savita/deepak)
+      # Phone number stored as a custom attribute, not the login identifier
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -546,6 +547,10 @@ Resources:
               Value: '<placeholder>'
             - Name: ANTHROPIC_CUSTOM_HEADERS
               Value: 'X-Amzn-Bedrock-GuardrailIdentifier:<id>\nX-Amzn-Bedrock-GuardrailVersion:1'
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoUserPoolClient
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPool
 
   AlhaECSLogGroup:
     Type: AWS::Logs::LogGroup

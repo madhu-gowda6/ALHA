@@ -5,7 +5,8 @@ import structlog
 
 log = structlog.get_logger()
 
-PHONE_PATTERN = re.compile(r"\+?91\d{10}")
+# Matches: +919XXXXXXXXX, 919XXXXXXXXX, or local 10-digit 9XXXXXXXXX
+PHONE_PATTERN = re.compile(r"(?:\+?91)?[6-9]\d{9}")
 
 
 def redact_phone(value: str) -> str:

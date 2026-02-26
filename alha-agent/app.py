@@ -1,6 +1,3 @@
-import json
-import os
-
 import structlog
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
