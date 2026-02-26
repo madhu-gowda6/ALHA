@@ -39,6 +39,7 @@ class TestStubEndpoints:
         body = client.get("/api/history").json()
         assert isinstance(body["data"], list)
 
-    def test_auth_login_stub_returns_200(self):
+    def test_auth_login_requires_body(self):
+        # Now requires username/password body — no body → 422 Unprocessable Entity
         response = client.post("/api/auth/login")
-        assert response.status_code == 200
+        assert response.status_code == 422

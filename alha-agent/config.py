@@ -16,6 +16,9 @@ class Config:
         self.anthropic_custom_headers: str = os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "")
         self.cognito_client_id: str = os.environ.get("COGNITO_CLIENT_ID", "")
         self.cognito_user_pool_id: str = os.environ.get("COGNITO_USER_POOL_ID", "")
+        # CORS_ORIGINS: comma-separated list of allowed origins, "*" for dev
+        _raw_cors = os.environ.get("CORS_ORIGINS", "*")
+        self.cors_origins: list[str] = [o.strip() for o in _raw_cors.split(",")]
 
 
 config = Config()
