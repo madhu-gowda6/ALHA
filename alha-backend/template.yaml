@@ -103,6 +103,19 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Suspended
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - PUT
+              - GET
+              - HEAD
+            AllowedHeaders:
+              - '*'
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
 
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -280,6 +293,7 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Retrieve
                 Resource: '*'
               - Effect: Allow
                 Action:

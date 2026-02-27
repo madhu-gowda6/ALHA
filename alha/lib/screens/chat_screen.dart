@@ -4,12 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/app_config.dart';
+import '../models/message.dart';
+import '../providers/camera_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/speech_service.dart';
 import '../services/websocket_service.dart';
+import '../widgets/camera_overlay.dart';
+import '../widgets/image_bubble.dart';
 import '../widgets/input_bar.dart';
 import '../widgets/language_toggle.dart';
+import '../widgets/symptom_interview_overlay.dart';
 import '../widgets/text_bubble.dart';
 import '../widgets/typing_indicator.dart';
 
@@ -28,6 +33,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   StreamSubscription? _wsSub;
   StreamSubscription? _wsStateSub;
+  StreamSubscription? _symptomSub;
+  StreamSubscription? _cameraSub;
   bool _isListening = false;
 
   @override
@@ -39,6 +46,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void _connect() {
     final session = ref.read(sessionProvider);
     final token = session.authToken ?? '';
+
+    // Wire WS send callback into chatProvider
+    ref.read(chatProvider.notifier).setWsSendFn(_wsService.send);
 
     _wsStateSub = _wsService.connectionStateStream.listen((state) {
       ref.read(sessionProvider.notifier).setConnectionState(state);
@@ -52,7 +62,63 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _scrollToBottom();
     });
 
+    // Listen to overlay trigger streams
+    _symptomSub = ref
+        .read(chatProvider.notifier)
+        .symptomInterviewTrigger
+        .listen(_showSymptomOverlay);
+
+    _cameraSub = ref
+        .read(chatProvider.notifier)
+        .cameraOverlayTrigger
+        .listen((_) => _showCameraOverlay());
+
     _wsService.connect(AppConfig.wsUrl, token);
+  }
+
+  void _showSymptomOverlay(SymptomInterviewEvent event) {
+    if (!mounted) return;
+    final session = ref.read(sessionProvider);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      builder: (_) => SymptomInterviewOverlay(
+        questions: event.questions,
+        questionsHi: event.questionsHi,
+        language: session.language,
+        onComplete: (answers) => ref
+            .read(chatProvider.notifier)
+            .sendSymptomAnswers(answers, session.sessionId ?? ''),
+      ),
+    ).then((_) {
+      if (mounted) {
+        ref.read(chatProvider.notifier).clearSymptomInterviewPending();
+      }
+    });
+  }
+
+  void _showCameraOverlay() {
+    if (!mounted) return;
+    final session = ref.read(sessionProvider);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      builder: (_) => CameraOverlay(
+        sessionId: session.sessionId ?? '',
+        authToken: session.authToken ?? '',
+        language: session.language,
+        onImageUploaded: (s3Key) => ref
+            .read(chatProvider.notifier)
+            .sendImageData(s3Key, session.sessionId ?? ''),
+        onAnalyzingMessage: () {},
+      ),
+    ).then((_) {
+      if (mounted) {
+        ref.read(chatProvider.notifier).clearCameraOverlayPending();
+      }
+    });
   }
 
   void _showReconnectSnackBar() {
@@ -132,6 +198,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
@@ -146,9 +213,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void dispose() {
     _wsSub?.cancel();
     _wsStateSub?.cancel();
+    _symptomSub?.cancel();
+    _cameraSub?.cancel();
     _wsService.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Widget _buildMessageItem(int i, ChatState chat, String language) {
+    // Show TypingIndicator as last item while streaming and no text yet
+    if (chat.isStreaming &&
+        i == chat.messages.length &&
+        chat.currentStreamingText.isEmpty) {
+      return const TypingIndicator();
+    }
+    if (i >= chat.messages.length) return const SizedBox.shrink();
+
+    final msg = chat.messages[i];
+
+    if (msg.type == MessageType.diagnosis && msg.diagnosisData != null) {
+      final cameraState = ref.watch(cameraProvider);
+      return ImageBubble(
+        diagnosisData: msg.diagnosisData!,
+        imageBytes: cameraState.imageBytesMap[msg.diagnosisData!.s3Key],
+        language: language,
+      );
+    }
+
+    return TextBubble(message: msg);
   }
 
   @override
@@ -188,18 +280,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             child: ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount:
-                  chat.messages.length + (chat.isStreaming ? 1 : 0),
-              itemBuilder: (_, i) {
-                // Show TypingIndicator as last item while streaming and no text yet
-                if (chat.isStreaming &&
-                    i == chat.messages.length &&
-                    chat.currentStreamingText.isEmpty) {
-                  return const TypingIndicator();
-                }
-                if (i >= chat.messages.length) return const SizedBox.shrink();
-                return TextBubble(message: chat.messages[i]);
-              },
+              itemCount: chat.messages.length + (chat.isStreaming ? 1 : 0),
+              itemBuilder: (_, i) =>
+                  _buildMessageItem(i, chat, session.language),
             ),
           ),
           InputBar(

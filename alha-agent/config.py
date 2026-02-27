@@ -11,6 +11,11 @@ class Config:
         self.s3_image_bucket: str = os.environ["S3_IMAGE_BUCKET"]
         self.rekognition_cattle_arn: str = os.environ.get("REKOGNITION_CATTLE_ARN", "")
         self.rekognition_poultry_arn: str = os.environ.get("REKOGNITION_POULTRY_ARN", "")
+        # ==== MOCK FLAG START: REMOVE BEFORE PRODUCTION ====
+        # Set REKOGNITION_MOCK=true in ECS env vars to bypass real Rekognition.
+        # Remove this line and the mock block in classify_disease.py before go-live.
+        self.rekognition_mock: bool = os.environ.get("REKOGNITION_MOCK", "false").lower() == "true"
+        # ==== MOCK FLAG END ====
         self.bedrock_kb_id: str = os.environ.get("BEDROCK_KB_ID", "")
         self.claude_use_bedrock: bool = os.environ.get("CLAUDE_CODE_USE_BEDROCK", "0") == "1"
         self.bedrock_model_id: str = os.environ.get(

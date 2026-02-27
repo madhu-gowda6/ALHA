@@ -7,19 +7,39 @@ from datetime import datetime
 os.environ.pop("CLAUDECODE", None)
 
 import structlog
-from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query
 from claude_agent_sdk.types import StreamEvent
 
 from config import config
 from hooks.logging_hook import LoggingHook
+from tools.classify_disease import classify_disease
+from tools.query_knowledge_base import query_knowledge_base
+from tools.request_image import request_image
+from tools.symptom_interview import symptom_interview
+from ws_map import _active_ws_map
 
 log = structlog.get_logger()
 _hook = LoggingHook()
+
+# In-process MCP server exposing all 4 Epic 3 tools to Claude
+_alha_mcp_server = create_sdk_mcp_server(
+    name="alha",
+    version="1.0.0",
+    tools=[symptom_interview, request_image, classify_disease, query_knowledge_base],
+)
+
+_ALLOWED_TOOLS = [
+    "mcp__alha__symptom_interview",
+    "mcp__alha__request_image",
+    "mcp__alha__classify_disease",
+    "mcp__alha__query_knowledge_base",
+]
 
 
 def _log_claude_stderr(line: str) -> None:
     """Forward claude subprocess stderr to structured logs for debugging."""
     log.warning("claude_subprocess_stderr", line=line.rstrip())
+
 
 SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompts", "system_prompt.txt")
 
@@ -34,13 +54,13 @@ def load_system_prompt() -> str:
     return _system_prompt
 
 
-def _build_prompt(history: list[dict], message: str, language: str) -> str:
+def _build_prompt(history: list[dict], message: str, language: str, session_id: str) -> str:
     """Build a conversation-aware prompt by prepending prior exchanges."""
     parts = []
     for entry in history:
         role = "Farmer" if entry["role"] == "user" else "Assistant"
         parts.append(f"{role}: {entry['content']}")
-    parts.append(f"[language: {language}]\nFarmer: {message}")
+    parts.append(f"[session_id: {session_id}]\n[language: {language}]\nFarmer: {message}")
     return "\n\n".join(parts)
 
 
@@ -57,7 +77,10 @@ async def process_message(
     conversation history.
     """
     system_prompt = load_system_prompt()
-    user_prompt = _build_prompt(history or [], message, language)
+    user_prompt = _build_prompt(history or [], message, language, session_id)
+
+    # Register this WebSocket so tool handlers can dispatch frontend_actions
+    _active_ws_map[session_id] = ws
 
     log.info(
         "agent_query_started",
@@ -81,12 +104,28 @@ async def process_message(
             "ANTHROPIC_CUSTOM_HEADERS": "",
         }
 
+        # Build an async-iterable prompt instead of a plain string.
+        # The SDK's string-prompt path calls end_input() immediately after
+        # writing the user message, which closes the subprocess stdin.
+        # With MCP servers, the subprocess sends control requests (tools/list,
+        # tools/call) back to the SDK that require writing responses to stdin.
+        # The async-iterable path uses stream_input() which keeps stdin open
+        # until the first result arrives, allowing MCP bidirectional I/O.
+        async def _prompt_iter():
+            yield {
+                "type": "user",
+                "session_id": "",
+                "message": {"role": "user", "content": user_prompt},
+                "parent_tool_use_id": None,
+            }
+
         async for event in query(
-            prompt=user_prompt,
+            prompt=_prompt_iter(),
             options=ClaudeAgentOptions(
                 system_prompt=system_prompt,
-                allowed_tools=[],
-                max_turns=1,
+                allowed_tools=_ALLOWED_TOOLS,
+                mcp_servers={"alha": _alha_mcp_server},
+                max_turns=10,
                 include_partial_messages=True,
                 model=config.bedrock_model_id if config.claude_use_bedrock else None,
                 env=subprocess_env,
@@ -131,13 +170,23 @@ async def process_message(
         return full_response
 
     except Exception as exc:
-        exc_str = str(exc).lower()
+        # Unwrap ExceptionGroup (raised by asyncio TaskGroup / anyio) to surface
+        # the actual root cause sub-exception in logs.
+        root_exc = exc
+        root_cause = str(exc)
+        if hasattr(exc, "exceptions") and exc.exceptions:
+            root_exc = exc.exceptions[0]
+            root_cause = f"sub[0]: {type(root_exc).__name__}: {root_exc}"
+
+        exc_str = (str(exc) + root_cause).lower()
         is_blocked = any(kw in exc_str for kw in ("guardrail", "blocked", "content policy"))
 
         log.warning(
             "agent_error",
             session_id=session_id,
             error=str(exc),
+            root_cause=root_cause,
+            exc_type=type(root_exc).__name__,
             is_guardrail_block=is_blocked,
             timestamp=datetime.utcnow().isoformat() + "Z",
         )
@@ -166,3 +215,7 @@ async def process_message(
                 timestamp=datetime.utcnow().isoformat() + "Z",
             )
         return ""
+
+    finally:
+        # Deregister WebSocket — session may re-register on next call
+        _active_ws_map.pop(session_id, None)

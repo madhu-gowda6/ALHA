@@ -1,12 +1,14 @@
+import asyncio
 import json
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
 import boto3
 import httpx
 import structlog
 from botocore.exceptions import ClientError
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
@@ -28,8 +30,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Module-level Cognito client — created once, reused per request
+# Module-level AWS clients — created once, reused per request
 _cognito = boto3.client("cognito-idp", region_name=config.aws_region)
+_s3 = boto3.client("s3", region_name=config.aws_region)
 
 # JWKS cache — refreshed on validation failure
 _jwks: Optional[dict] = None
@@ -39,6 +42,24 @@ _jwks: Optional[dict] = None
 # Capped at _MAX_HISTORY entries to avoid unbounded growth.
 _session_histories: dict[str, list[dict]] = {}
 _MAX_HISTORY = 40
+
+# Tracks which sessions are waiting for a specific message type from Flutter.
+# Values: "symptom_answers" | "image_data" | None
+_pending_action_sessions: dict[str, Optional[str]] = {}
+
+# Per-session asyncio locks — ensures at most one process_message runs at a
+# time for a given session, preventing concurrent history corruption.
+_session_locks: dict[str, asyncio.Lock] = {}
+
+# Per-session language — set on first "chat" message, reused for
+# symptom_answers / image_data which don't include a language field.
+_session_languages: dict[str, str] = {}
+
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    if session_id not in _session_locks:
+        _session_locks[session_id] = asyncio.Lock()
+    return _session_locks[session_id]
 
 
 async def _fetch_jwks() -> dict:
@@ -94,6 +115,16 @@ async def _validate_jwt(token: str) -> dict:
     return claims
 
 
+def _extract_animal_type_from_history(history: list[dict]) -> str:
+    """Best-effort extraction of animal_type from conversation history."""
+    for entry in reversed(history):
+        content = entry.get("content", "").lower()
+        for animal in ("cattle", "poultry", "buffalo", "goat", "sheep"):
+            if animal in content:
+                return animal
+    return "cattle"  # safe default
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -102,6 +133,30 @@ async def _validate_jwt(token: str) -> dict:
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/debug/claude")
+async def debug_claude():
+    """Probe the claude CLI subprocess. Remove before production."""
+    import asyncio as _asyncio
+    results = {}
+    # 1. Basic binary check
+    try:
+        r = _subprocess.run(["which", "claude"], capture_output=True, text=True, timeout=5)
+        results["which_claude"] = r.stdout.strip() or r.stderr.strip()
+    except Exception as e:
+        results["which_claude"] = str(e)
+    # 2. Version check
+    try:
+        r = _subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
+        results["version_stdout"] = r.stdout.strip()
+        results["version_stderr"] = r.stderr.strip()
+        results["version_rc"] = r.returncode
+    except Exception as e:
+        results["version_error"] = str(e)
+    # 3. Event loop type
+    results["event_loop"] = type(_asyncio.get_event_loop()).__name__
+    return results
 
 
 class LoginRequest(BaseModel):
@@ -272,25 +327,118 @@ async def websocket_endpoint(ws: WebSocket):
                     )
                     continue
                 language = data.get("language", "en")
+                _session_languages[session_id] = language
 
                 start_time = datetime.utcnow()
                 await _hook.pre_tool_use(session_id, "chat", {"language": language})
 
                 history = _session_histories.setdefault(session_id, [])
-                assistant_response = await process_message(
-                    session_id, message, language, ws, history
-                )
+                async with _get_session_lock(session_id):
+                    assistant_response = await process_message(
+                        session_id, message, language, ws, history
+                    )
 
-                # Store the exchange in history so the next message has context.
-                if assistant_response:
-                    history.append({"role": "user", "content": message})
-                    history.append({"role": "assistant", "content": assistant_response})
-                    # Cap to prevent unbounded growth
-                    if len(history) > _MAX_HISTORY:
-                        _session_histories[session_id] = history[-_MAX_HISTORY:]
+                    # Store the exchange in history so the next message has context.
+                    if assistant_response:
+                        history.append({"role": "user", "content": message})
+                        history.append({"role": "assistant", "content": assistant_response})
+                        # Cap to prevent unbounded growth
+                        if len(history) > _MAX_HISTORY:
+                            _session_histories[session_id] = history[-_MAX_HISTORY:]
 
                 duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
                 await _hook.post_tool_use(session_id, "chat", {}, duration_ms)
+
+            elif msg_type == "symptom_answers":
+                # Farmer completed the SymptomInterviewOverlay — inject answers into history
+                # and resume the agentic loop.
+                raw_answers = data.get("answers", [])
+                if not raw_answers or not isinstance(raw_answers, list):
+                    continue
+                # Cap to 10 answers and sanitise each entry
+                if len(raw_answers) > 10:
+                    raw_answers = raw_answers[:10]
+                answers = []
+                for a in raw_answers:
+                    if not isinstance(a, dict):
+                        continue
+                    q = str(a.get("question", "")).strip()[:500]
+                    ans = str(a.get("answer", "")).strip()[:1000]
+                    if q and ans:
+                        answers.append({"question": q, "answer": ans})
+                if not answers:
+                    continue
+
+                history = _session_histories.setdefault(session_id, [])
+                language = _session_languages.get(session_id, data.get("language", "en"))
+
+                # Build a single history entry from all Q&A pairs
+                qa_text = "Symptom answers:\n" + "\n".join(
+                    f"Q: {a['question']}\nA: {a['answer']}" for a in answers
+                )
+                history.append({"role": "user", "content": qa_text})
+                if len(history) > _MAX_HISTORY:
+                    _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+                _pending_action_sessions.pop(session_id, None)
+
+                log.info(
+                    "symptom_answers_received",
+                    session_id=session_id,
+                    answer_count=len(answers),
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
+                # Resume agent with the symptom answers (serialised per session)
+                async with _get_session_lock(session_id):
+                    assistant_response = await process_message(
+                        session_id, qa_text, language, ws, history
+                    )
+                    if assistant_response:
+                        history.append({"role": "assistant", "content": assistant_response})
+                        if len(history) > _MAX_HISTORY:
+                            _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+            elif msg_type == "image_data":
+                # Flutter uploaded image to S3 — inject into history and resume agent
+                s3_key = str(data.get("s3_key", "")).strip()
+                # Validate key to prevent injecting arbitrary content into history
+                if not s3_key or len(s3_key) > 500 or ".." in s3_key:
+                    continue
+
+                history = _session_histories.setdefault(session_id, [])
+                language = _session_languages.get(session_id, data.get("language", "en"))
+                animal_type = _extract_animal_type_from_history(history)
+
+                image_message = (
+                    f"Image uploaded. S3 key: {s3_key}. "
+                    f"Animal type: {animal_type}. "
+                    "Please classify the disease."
+                )
+                history.append({"role": "user", "content": image_message})
+                if len(history) > _MAX_HISTORY:
+                    _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+                _pending_action_sessions.pop(session_id, None)
+
+                log.info(
+                    "image_data_received",
+                    session_id=session_id,
+                    s3_key=s3_key,
+                    animal_type=animal_type,
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
+                # Resume agent for disease classification (serialised per session)
+                async with _get_session_lock(session_id):
+                    assistant_response = await process_message(
+                        session_id, image_message, language, ws, history
+                    )
+                    if assistant_response:
+                        history.append({"role": "assistant", "content": assistant_response})
+                        if len(history) > _MAX_HISTORY:
+                            _session_histories[session_id] = history[-_MAX_HISTORY:]
+
             else:
                 log.warning(
                     "ws_unknown_message_type",
@@ -307,8 +455,65 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 @app.post("/api/upload-url")
-async def upload_url():
-    return {"success": True, "data": {}, "error": None}
+async def upload_url(
+    session_id: str = "",
+    authorization: Optional[str] = Header(default=None),
+):
+    """Generate a pre-signed S3 PUT URL for image upload."""
+    # Extract session_id from Authorization header (JWT sub claim) if not provided
+    if not session_id and authorization:
+        try:
+            token = authorization.removeprefix("Bearer ").strip()
+            claims = await _validate_jwt(token)
+            session_id = claims.get("sub", str(uuid4()))
+        except Exception:
+            session_id = str(uuid4())
+
+    if not session_id:
+        session_id = str(uuid4())
+
+    s3_key = f"uploads/{session_id}/{uuid4()}.jpg"
+
+    try:
+        upload_presigned_url = _s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": config.s3_image_bucket,
+                "Key": s3_key,
+                "ContentType": "image/jpeg",
+            },
+            ExpiresIn=900,  # 15 minutes
+        )
+        log.info(
+            "presigned_url_generated",
+            session_id=session_id,
+            s3_key=s3_key,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
+        return {
+            "success": True,
+            "data": {"upload_url": upload_presigned_url, "s3_key": s3_key},
+            "error": None,
+        }
+    except ClientError as exc:
+        log.error(
+            "presigned_url_error",
+            session_id=session_id,
+            error=str(exc),
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "UPLOAD_URL_ERROR",
+                    "message": "Could not generate upload URL. Please try again.",
+                    "message_hi": "अपलोड URL उत्पन्न नहीं हो सका। कृपया पुनः प्रयास करें।",
+                },
+            },
+        )
 
 
 @app.get("/api/history")
