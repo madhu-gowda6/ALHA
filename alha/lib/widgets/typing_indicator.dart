@@ -11,6 +11,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
     with TickerProviderStateMixin {
   late final List<AnimationController> _controllers;
   late final List<Animation<double>> _animations;
+  bool _disposed = false;
 
   @override
   void initState() {
@@ -32,22 +33,26 @@ class _TypingIndicatorState extends State<TypingIndicator>
   }
 
   void _startAnimation() async {
-    while (mounted) {
+    while (!_disposed && mounted) {
       for (var i = 0; i < 3; i++) {
-        if (!mounted) return;
+        if (_disposed || !mounted) return;
         _controllers[i].forward(from: 0);
         await Future.delayed(const Duration(milliseconds: 150));
       }
+      if (_disposed || !mounted) return;
       await Future.delayed(const Duration(milliseconds: 400));
+      if (_disposed || !mounted) return;
       for (final c in _controllers) {
         c.reverse();
       }
+      if (_disposed || !mounted) return;
       await Future.delayed(const Duration(milliseconds: 300));
     }
   }
 
   @override
   void dispose() {
+    _disposed = true;
     for (final c in _controllers) {
       c.dispose();
     }

@@ -2,14 +2,24 @@
 import os
 from datetime import datetime
 
+# The SDK always merges {**os.environ, **user_env} so CLAUDECODE must be removed
+# from os.environ itself — not just from the user_env dict passed to the SDK.
+os.environ.pop("CLAUDECODE", None)
+
 import structlog
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import StreamEvent
 
+from config import config
 from hooks.logging_hook import LoggingHook
 
 log = structlog.get_logger()
 _hook = LoggingHook()
+
+
+def _log_claude_stderr(line: str) -> None:
+    """Forward claude subprocess stderr to structured logs for debugging."""
+    log.warning("claude_subprocess_stderr", line=line.rstrip())
 
 SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompts", "system_prompt.txt")
 
@@ -38,6 +48,17 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
     )
 
     try:
+        # Merge current process env so the claude subprocess inherits AWS
+        # credential env vars (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, AWS_REGION,
+        # etc.) that ECS injects, then layer any overrides on top.
+        subprocess_env = {
+            **os.environ,
+            "CLAUDE_CODE_ACCEPT_TOS": "1",
+            # Clear placeholder guardrail headers — an invalid guardrail ID causes
+            # Bedrock to reject every request with a 400 error.
+            "ANTHROPIC_CUSTOM_HEADERS": "",
+        }
+
         async for event in query(
             prompt=user_prompt,
             options=ClaudeAgentOptions(
@@ -45,6 +66,9 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
                 allowed_tools=[],
                 max_turns=1,
                 include_partial_messages=True,
+                model=config.bedrock_model_id if config.claude_use_bedrock else None,
+                env=subprocess_env,
+                stderr=_log_claude_stderr,
             ),
         ):
             if isinstance(event, StreamEvent):

@@ -527,6 +527,10 @@ Resources:
           Environment:
             - Name: CLAUDE_CODE_USE_BEDROCK
               Value: '1'
+            - Name: BEDROCK_MODEL_ID
+              Value: 'us.anthropic.claude-sonnet-4-6'
+            - Name: CLAUDE_CODE_ACCEPT_TOS
+              Value: '1'
             - Name: AWS_REGION
               Value: !Ref AWS::Region
             - Name: CONSULTATIONS_TABLE
@@ -546,7 +550,7 @@ Resources:
             - Name: BEDROCK_KB_ID
               Value: '<placeholder>'
             - Name: ANTHROPIC_CUSTOM_HEADERS
-              Value: 'X-Amzn-Bedrock-GuardrailIdentifier:<id>\nX-Amzn-Bedrock-GuardrailVersion:1'
+              Value: ''
             - Name: COGNITO_CLIENT_ID
               Value: !Ref CognitoUserPoolClient
             - Name: COGNITO_USER_POOL_ID

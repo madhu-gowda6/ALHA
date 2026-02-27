@@ -13,6 +13,9 @@ class Config:
         self.rekognition_poultry_arn: str = os.environ.get("REKOGNITION_POULTRY_ARN", "")
         self.bedrock_kb_id: str = os.environ.get("BEDROCK_KB_ID", "")
         self.claude_use_bedrock: bool = os.environ.get("CLAUDE_CODE_USE_BEDROCK", "0") == "1"
+        self.bedrock_model_id: str = os.environ.get(
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
+        )
         self.anthropic_custom_headers: str = os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "")
         self.cognito_client_id: str = os.environ.get("COGNITO_CLIENT_ID", "")
         self.cognito_user_pool_id: str = os.environ.get("COGNITO_USER_POOL_ID", "")

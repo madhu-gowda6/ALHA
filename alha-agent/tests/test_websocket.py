@@ -95,3 +95,53 @@ class TestWebSocketMessageParsing:
                 ws.send_text("not json at all")
                 err = ws.receive_json()
             assert "session_id" in err
+            assert isinstance(err["session_id"], str)  # must be a string, even if ""
+
+    def test_ws_empty_message_is_dropped_silently(self):
+        mock_process = AsyncMock()
+        with patch.object(
+            app_module, "_validate_jwt", new=self._make_valid_session()
+        ), patch.object(app_module, "process_message", new=mock_process):
+            with client.websocket_connect("/ws?token=valid") as ws:
+                ws.send_json({
+                    "type": "chat",
+                    "session_id": "sess-1",
+                    "message": "",
+                    "language": "hi",
+                })
+                ws.send_json({
+                    "type": "chat",
+                    "session_id": "sess-1",
+                    "message": "   ",  # whitespace-only
+                    "language": "hi",
+                })
+        mock_process.assert_not_called()
+
+    def test_ws_message_too_long_returns_error(self):
+        mock_process = AsyncMock()
+        with patch.object(
+            app_module, "_validate_jwt", new=self._make_valid_session()
+        ), patch.object(app_module, "process_message", new=mock_process):
+            with client.websocket_connect("/ws?token=valid") as ws:
+                ws.send_json({
+                    "type": "chat",
+                    "session_id": "sess-1",
+                    "message": "a" * 2001,
+                    "language": "en",
+                })
+                err = ws.receive_json()
+        assert err["type"] == "error"
+        assert "message_hi" in err
+        assert err["session_id"] == "sess-1"
+        mock_process.assert_not_called()
+
+    def test_ws_jwks_fetch_failure_returns_error(self):
+        with patch.object(
+            app_module,
+            "_validate_jwt",
+            new=AsyncMock(side_effect=RuntimeError("JWKS fetch timeout")),
+        ):
+            with client.websocket_connect("/ws?token=any-token") as ws:
+                msg = ws.receive_json()
+        assert msg["type"] == "error"
+        assert "message_hi" in msg

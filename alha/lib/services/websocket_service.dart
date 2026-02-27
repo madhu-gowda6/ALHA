@@ -38,19 +38,13 @@ class WebSocketService {
     _setState(WsConnectionState.connecting);
     try {
       _channel = WebSocketChannel.connect(Uri.parse('$_url?token=$_token'));
+      _setState(WsConnectionState.connected);
+      _reconnectDelay = 1;
       _subscription = _channel!.stream.listen(
         _onData,
         onError: _onError,
         onDone: _onDone,
       );
-      // Wait for actual WebSocket handshake before marking connected
-      _channel!.ready.then((_) {
-        _setState(WsConnectionState.connected);
-        _reconnectDelay = 1;
-      }).catchError((e) {
-        debugPrint('WebSocket ready error: $e');
-        if (_shouldReconnect) _scheduleReconnect();
-      });
     } catch (e) {
       debugPrint('WebSocket connect error: $e');
       _scheduleReconnect();
