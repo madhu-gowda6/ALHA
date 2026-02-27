@@ -34,6 +34,12 @@ _cognito = boto3.client("cognito-idp", region_name=config.aws_region)
 # JWKS cache — refreshed on validation failure
 _jwks: Optional[dict] = None
 
+# In-memory conversation history keyed by session_id.
+# Each value is a list of {"role": "user"|"assistant", "content": str} dicts.
+# Capped at _MAX_HISTORY entries to avoid unbounded growth.
+_session_histories: dict[str, list[dict]] = {}
+_MAX_HISTORY = 40
+
 
 async def _fetch_jwks() -> dict:
     global _jwks
@@ -270,7 +276,18 @@ async def websocket_endpoint(ws: WebSocket):
                 start_time = datetime.utcnow()
                 await _hook.pre_tool_use(session_id, "chat", {"language": language})
 
-                await process_message(session_id, message, language, ws)
+                history = _session_histories.setdefault(session_id, [])
+                assistant_response = await process_message(
+                    session_id, message, language, ws, history
+                )
+
+                # Store the exchange in history so the next message has context.
+                if assistant_response:
+                    history.append({"role": "user", "content": message})
+                    history.append({"role": "assistant", "content": assistant_response})
+                    # Cap to prevent unbounded growth
+                    if len(history) > _MAX_HISTORY:
+                        _session_histories[session_id] = history[-_MAX_HISTORY:]
 
                 duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
                 await _hook.post_tool_use(session_id, "chat", {}, duration_ms)

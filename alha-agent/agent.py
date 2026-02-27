@@ -34,10 +34,30 @@ def load_system_prompt() -> str:
     return _system_prompt
 
 
-async def process_message(session_id: str, message: str, language: str, ws) -> None:
-    """Stream agent response tokens back to the WebSocket client."""
+def _build_prompt(history: list[dict], message: str, language: str) -> str:
+    """Build a conversation-aware prompt by prepending prior exchanges."""
+    parts = []
+    for entry in history:
+        role = "Farmer" if entry["role"] == "user" else "Assistant"
+        parts.append(f"{role}: {entry['content']}")
+    parts.append(f"[language: {language}]\nFarmer: {message}")
+    return "\n\n".join(parts)
+
+
+async def process_message(
+    session_id: str,
+    message: str,
+    language: str,
+    ws,
+    history: list[dict] | None = None,
+) -> str:
+    """Stream agent response tokens back to the WebSocket client.
+
+    Returns the full assistant response text so the caller can store it in
+    conversation history.
+    """
     system_prompt = load_system_prompt()
-    user_prompt = f"[language: {language}]\n{message}"
+    user_prompt = _build_prompt(history or [], message, language)
 
     log.info(
         "agent_query_started",
@@ -46,6 +66,8 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
         message_length=len(message),
         timestamp=datetime.utcnow().isoformat() + "Z",
     )
+
+    full_response = ""
 
     try:
         # Merge current process env so the claude subprocess inherits AWS
@@ -78,6 +100,7 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
                     if delta.get("type") == "text_delta":
                         text_chunk = delta.get("text", "")
                         if text_chunk:
+                            full_response += text_chunk
                             _hook.log_token_streamed(session_id, len(text_chunk))
                             try:
                                 await ws.send_json(
@@ -93,7 +116,7 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
                                     session_id=session_id,
                                     timestamp=datetime.utcnow().isoformat() + "Z",
                                 )
-                                return
+                                return full_response
 
         _hook.log_response_complete(session_id)
         try:
@@ -104,6 +127,8 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
                 session_id=session_id,
                 timestamp=datetime.utcnow().isoformat() + "Z",
             )
+
+        return full_response
 
     except Exception as exc:
         exc_str = str(exc).lower()
@@ -140,3 +165,4 @@ async def process_message(session_id: str, message: str, language: str, ws) -> N
                 session_id=session_id,
                 timestamp=datetime.utcnow().isoformat() + "Z",
             )
+        return ""

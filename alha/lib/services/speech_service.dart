@@ -4,9 +4,14 @@ class SpeechService {
   final SpeechToText _speech = SpeechToText();
   bool _initialized = false;
 
+
+  void Function(String)? _onError;
+
   Future<bool> initialize() async {
+    if (_initialized) return true;
     _initialized = await _speech.initialize(
-      onError: (error) {},
+      // _onError before each listen() call routes errors to the right handler.
+      onError: (error) => _onError?.call(error.errorMsg),
       onStatus: (status) {},
     );
     return _initialized;
@@ -17,7 +22,9 @@ class SpeechService {
   Future<void> startListening(
     void Function(String transcript) onResult, {
     String localeId = 'hi_IN',
+    void Function(String error)? onError,
   }) async {
+    _onError = onError;
     if (!_initialized) await initialize();
     if (!_initialized) return;
 

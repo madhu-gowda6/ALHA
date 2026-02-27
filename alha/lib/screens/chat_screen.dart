@@ -107,10 +107,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await _speechService.startListening(
         (transcript) {
           setState(() => _isListening = false);
-          // Populate InputBar with transcript
           _inputBarKey.currentState?.setVoiceText(transcript);
         },
         localeId: lang == 'en' ? 'en_US' : 'hi_IN',
+        onError: (error) {
+          setState(() => _isListening = false);
+          if (!mounted) return;
+          final isPermission = error.contains('not_allowed') ||
+              error.contains('permission') ||
+              error.contains('denied');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                isPermission
+                    ? 'Microphone access denied / माइक्रोफ़ोन की अनुमति नहीं मिली'
+                    : 'Voice error: $error / आवाज़ त्रुटि हुई',
+              ),
+            ),
+          );
+        },
       );
     }
   }
