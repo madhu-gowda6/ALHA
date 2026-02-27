@@ -128,6 +128,67 @@ Resources:
             Action: s3:GetObject
             Resource: !Sub 'arn:aws:s3:::alha-frontend/*'
 
+  # ── CloudFront Distribution ──────────────────────────────
+
+  FrontendCloudFront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3WebsiteOrigin
+            DomainName: !Sub 'alha-frontend.s3-website-${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+          - Id: ALBOrigin
+            DomainName: !GetAtt AlhaALB.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+        CacheBehaviors:
+          - PathPattern: '/ws'
+            TargetOriginId: ALBOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - '*'
+              Cookies:
+                Forward: all
+            DefaultTTL: 0
+            MinTTL: 0
+            MaxTTL: 0
+        DefaultCacheBehavior:
+          TargetOriginId: S3WebsiteOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        PriceClass: PriceClass_100
+
   # ── Cognito ──────────────────────────────────────────────
 
   CognitoUserPool:
@@ -569,7 +630,7 @@ Resources:
       ServiceName: alha-agent-service
       Cluster: !Ref AlhaECSCluster
       TaskDefinition: !Ref AlhaTaskDefinition
-      DesiredCount: 0
+      DesiredCount: 1
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -619,3 +680,7 @@ Outputs:
   ECSClusterName:
     Description: ECS Cluster name
     Value: !Ref AlhaECSCluster
+
+  FrontendCloudFrontUrl:
+    Description: CloudFront HTTPS URL for Flutter PWA (use this - mic/camera will work)
+    Value: !Sub 'https://${FrontendCloudFront.DomainName}'

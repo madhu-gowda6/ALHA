@@ -10,8 +10,12 @@ class AppConfig {
   );
 
   static String get wsUrl {
-    final wsScheme = Uri.base.scheme == 'https' ? 'wss' : 'ws';
-    return '$wsScheme://$albDns/ws';
+    if (Uri.base.scheme == 'https') {
+      // On HTTPS (CloudFront), route WebSocket through CloudFront /ws behavior
+      // so the browser never makes a mixed-content ws:// request.
+      return 'wss://${Uri.base.host}/ws';
+    }
+    return 'ws://$albDns/ws';
   }
 
   static const String cognitoClientId = String.fromEnvironment(
