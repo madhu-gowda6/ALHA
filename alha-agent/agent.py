@@ -12,20 +12,37 @@ from claude_agent_sdk.types import StreamEvent
 
 from config import config
 from hooks.logging_hook import LoggingHook
+from hooks.pii_filter_hook import PIIFilterHook
+from tools.assess_severity import assess_severity
 from tools.classify_disease import classify_disease
+from tools.find_nearest_vet import find_nearest_vet
 from tools.query_knowledge_base import query_knowledge_base
+from tools.request_gps import request_gps
 from tools.request_image import request_image
+from tools.save_consultation import save_consultation
+from tools.send_notification import send_notification
 from tools.symptom_interview import symptom_interview
 from ws_map import _active_ws_map
 
 log = structlog.get_logger()
 _hook = LoggingHook()
+_pii_hook = PIIFilterHook()
 
-# In-process MCP server exposing all 4 Epic 3 tools to Claude
+# In-process MCP server exposing all 9 tools (Epic 3 + Epic 4) to Claude
 _alha_mcp_server = create_sdk_mcp_server(
     name="alha",
     version="1.0.0",
-    tools=[symptom_interview, request_image, classify_disease, query_knowledge_base],
+    tools=[
+        symptom_interview,
+        request_image,
+        classify_disease,
+        query_knowledge_base,
+        assess_severity,
+        request_gps,
+        find_nearest_vet,
+        send_notification,
+        save_consultation,
+    ],
 )
 
 _ALLOWED_TOOLS = [
@@ -33,6 +50,11 @@ _ALLOWED_TOOLS = [
     "mcp__alha__request_image",
     "mcp__alha__classify_disease",
     "mcp__alha__query_knowledge_base",
+    "mcp__alha__assess_severity",
+    "mcp__alha__request_gps",
+    "mcp__alha__find_nearest_vet",
+    "mcp__alha__send_notification",
+    "mcp__alha__save_consultation",
 ]
 
 
@@ -54,13 +76,17 @@ def load_system_prompt() -> str:
     return _system_prompt
 
 
-def _build_prompt(history: list[dict], message: str, language: str, session_id: str) -> str:
+def _build_prompt(
+    history: list[dict], message: str, language: str, session_id: str, farmer_phone: str = ""
+) -> str:
     """Build a conversation-aware prompt by prepending prior exchanges."""
     parts = []
     for entry in history:
         role = "Farmer" if entry["role"] == "user" else "Assistant"
         parts.append(f"{role}: {entry['content']}")
-    parts.append(f"[session_id: {session_id}]\n[language: {language}]\nFarmer: {message}")
+    parts.append(
+        f"[session_id: {session_id}]\n[language: {language}]\n[farmer_phone: {farmer_phone}]\nFarmer: {message}"
+    )
     return "\n\n".join(parts)
 
 
@@ -70,6 +96,7 @@ async def process_message(
     language: str,
     ws,
     history: list[dict] | None = None,
+    farmer_phone: str = "",
 ) -> str:
     """Stream agent response tokens back to the WebSocket client.
 
@@ -77,7 +104,7 @@ async def process_message(
     conversation history.
     """
     system_prompt = load_system_prompt()
-    user_prompt = _build_prompt(history or [], message, language, session_id)
+    user_prompt = _build_prompt(history or [], message, language, session_id, farmer_phone)
 
     # Register this WebSocket so tool handlers can dispatch frontend_actions
     _active_ws_map[session_id] = ws

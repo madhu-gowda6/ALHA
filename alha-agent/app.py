@@ -55,6 +55,9 @@ _session_locks: dict[str, asyncio.Lock] = {}
 # symptom_answers / image_data which don't include a language field.
 _session_languages: dict[str, str] = {}
 
+# Per-session farmer phone — extracted from Cognito JWT phone_number claim.
+_session_farmer_phones: dict[str, str] = {}
+
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
     if session_id not in _session_locks:
@@ -139,6 +142,7 @@ async def health():
 async def debug_claude():
     """Probe the claude CLI subprocess. Remove before production."""
     import asyncio as _asyncio
+    import subprocess as _subprocess
     results = {}
     # 1. Basic binary check
     try:
@@ -278,6 +282,9 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.close(code=4002)
         return
 
+    # Extract farmer phone from JWT — stored in Cognito phone_number claim
+    farmer_phone = claims.get("phone_number", "")
+
     await ws.accept()
     log.info(
         "ws_connected",
@@ -328,6 +335,7 @@ async def websocket_endpoint(ws: WebSocket):
                     continue
                 language = data.get("language", "en")
                 _session_languages[session_id] = language
+                _session_farmer_phones[session_id] = farmer_phone
 
                 start_time = datetime.utcnow()
                 await _hook.pre_tool_use(session_id, "chat", {"language": language})
@@ -335,7 +343,8 @@ async def websocket_endpoint(ws: WebSocket):
                 history = _session_histories.setdefault(session_id, [])
                 async with _get_session_lock(session_id):
                     assistant_response = await process_message(
-                        session_id, message, language, ws, history
+                        session_id, message, language, ws, history,
+                        farmer_phone=_session_farmer_phones.get(session_id, ""),
                     )
 
                     # Store the exchange in history so the next message has context.
@@ -392,7 +401,8 @@ async def websocket_endpoint(ws: WebSocket):
                 # Resume agent with the symptom answers (serialised per session)
                 async with _get_session_lock(session_id):
                     assistant_response = await process_message(
-                        session_id, qa_text, language, ws, history
+                        session_id, qa_text, language, ws, history,
+                        farmer_phone=_session_farmer_phones.get(session_id, ""),
                     )
                     if assistant_response:
                         history.append({"role": "assistant", "content": assistant_response})
@@ -432,7 +442,79 @@ async def websocket_endpoint(ws: WebSocket):
                 # Resume agent for disease classification (serialised per session)
                 async with _get_session_lock(session_id):
                     assistant_response = await process_message(
-                        session_id, image_message, language, ws, history
+                        session_id, image_message, language, ws, history,
+                        farmer_phone=_session_farmer_phones.get(session_id, ""),
+                    )
+                    if assistant_response:
+                        history.append({"role": "assistant", "content": assistant_response})
+                        if len(history) > _MAX_HISTORY:
+                            _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+            elif msg_type == "gps_data":
+                # Farmer shared GPS — inject coordinates into history and resume agent
+                lat = data.get("lat")
+                lon = data.get("lon")
+                if lat is None or lon is None:
+                    continue
+
+                history = _session_histories.setdefault(session_id, [])
+                language = _session_languages.get(session_id, "en")
+
+                gps_message = (
+                    f"GPS coordinates received. lat={lat}, lon={lon}. "
+                    "Please find the nearest vet."
+                )
+                history.append({"role": "user", "content": gps_message})
+                if len(history) > _MAX_HISTORY:
+                    _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+                log.info(
+                    "gps_data_received",
+                    session_id=session_id,
+                    lat=lat,
+                    lon=lon,
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
+                async with _get_session_lock(session_id):
+                    assistant_response = await process_message(
+                        session_id, gps_message, language, ws, history,
+                        farmer_phone=_session_farmer_phones.get(session_id, ""),
+                    )
+                    if assistant_response:
+                        history.append({"role": "assistant", "content": assistant_response})
+                        if len(history) > _MAX_HISTORY:
+                            _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+            elif msg_type == "vet_preference":
+                # Farmer responded to vet-preference card (yes/no)
+                choice = str(data.get("choice", "")).strip().lower()
+                if choice not in ("yes", "no"):
+                    continue
+
+                history = _session_histories.setdefault(session_id, [])
+                language = _session_languages.get(session_id, "en")
+
+                if choice == "yes":
+                    pref_message = "Farmer confirmed: yes, please contact a vet."
+                else:
+                    pref_message = "Farmer declined vet contact. Please provide self-care guidance only."
+
+                history.append({"role": "user", "content": pref_message})
+                if len(history) > _MAX_HISTORY:
+                    _session_histories[session_id] = history[-_MAX_HISTORY:]
+
+                log.info(
+                    "vet_preference_received",
+                    session_id=session_id,
+                    choice=choice,
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
+                async with _get_session_lock(session_id):
+                    assistant_response = await process_message(
+                        session_id, pref_message, language, ws, history,
+                        farmer_phone=_session_farmer_phones.get(session_id, ""),
                     )
                     if assistant_response:
                         history.append({"role": "assistant", "content": assistant_response})

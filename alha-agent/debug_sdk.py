@@ -1,10 +1,15 @@
 """Quick standalone debug script to test claude_agent_sdk with Bedrock.
 
 Usage:
-    python debug_sdk.py           — test 1: basic SDK, no tools (original test)
-    python debug_sdk.py mcp       — test 2: MCP server with mcp__alha__ prefixed allowed_tools
-    python debug_sdk.py mcp-simple — test 3: MCP server with simple (non-prefixed) allowed_tools
-    python debug_sdk.py mcp-none  — test 4: MCP server with NO allowed_tools restriction
+    python debug_sdk.py              -- basic SDK smoke test, no tools
+    python debug_sdk.py mcp          -- Epic 3 tools with mcp__alha__ prefixed allowed_tools
+    python debug_sdk.py mcp-simple   -- Epic 3 tools with simple (non-prefixed) allowed_tools
+    python debug_sdk.py mcp-none     -- Epic 3 tools with NO allowed_tools restriction
+    python debug_sdk.py epic4        -- Epic 4 full flow: Phase 1 (disease -> assess+GPS request)
+                                        then Phase 2 (GPS received -> find_vet + SMS + save)
+    python debug_sdk.py epic4-phase1 -- Epic 4 Phase 1 only (assess_severity + request_gps)
+    python debug_sdk.py epic4-phase2 -- Epic 4 Phase 2 only (find_nearest_vet + send_notification + save_consultation)
+    python debug_sdk.py raw          -- raw subprocess test (claude CLI stderr/stdout capture)
 """
 import asyncio
 import os
@@ -71,7 +76,10 @@ async def run_test(label: str, prompt, allowed_tools: list, mcp_servers: dict, m
                 if evt_type == "content_block_delta":
                     delta = raw.get("delta", {})
                     if delta.get("type") == "text_delta":
-                        print(delta.get("text", ""), end="", flush=True)
+                        text = delta.get("text", "")
+                        # Encode with 'replace' to survive non-cp1252 chars (emoji etc.)
+                        sys.stdout.buffer.write(text.encode(sys.stdout.encoding or "utf-8", errors="replace"))
+                        sys.stdout.buffer.flush()
                     elif delta.get("type") == "input_json_delta":
                         pass  # tool input streaming, skip
                 elif evt_type == "content_block_start":
@@ -294,6 +302,185 @@ async def main():
             max_turns=10,
             system_prompt=alha_system_prompt,
         )
+    elif mode.startswith("epic4"):
+        # --- Epic 4 full-flow test with mocked AWS services ---
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        print("Loading ALHA all-9-tools MCP server...", flush=True)
+        from claude_agent_sdk import create_sdk_mcp_server
+
+        # Epic 3
+        from tools.classify_disease import classify_disease
+        from tools.query_knowledge_base import query_knowledge_base
+        from tools.request_image import request_image
+        from tools.symptom_interview import symptom_interview
+        # Epic 4
+        from tools.assess_severity import assess_severity
+        from tools.find_nearest_vet import find_nearest_vet
+        from tools.request_gps import request_gps
+        from tools.save_consultation import save_consultation
+        from tools.send_notification import send_notification
+        # Module references used by patch.object
+        import tools.find_nearest_vet as _fnv_mod
+        import tools.save_consultation as _sc_mod
+        import tools.send_notification as _sn_mod
+
+        mcp_server = create_sdk_mcp_server(
+            name="alha",
+            version="1.0.0",
+            tools=[
+                symptom_interview, request_image, classify_disease, query_knowledge_base,
+                assess_severity, request_gps, find_nearest_vet, send_notification, save_consultation,
+            ],
+        )
+
+        sys_prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "system_prompt.txt")
+        try:
+            with open(sys_prompt_path, encoding="utf-8") as f:
+                alha_system_prompt = f.read()
+            print(f"Loaded system prompt ({len(alha_system_prompt)} chars)", flush=True)
+        except FileNotFoundError:
+            alha_system_prompt = "You are a veterinary AI assistant. Use the provided tools."
+            print("System prompt not found, using fallback", flush=True)
+
+        _ALLOWED_TOOLS = [
+            "mcp__alha__symptom_interview",
+            "mcp__alha__request_image",
+            "mcp__alha__classify_disease",
+            "mcp__alha__query_knowledge_base",
+            "mcp__alha__assess_severity",
+            "mcp__alha__request_gps",
+            "mcp__alha__find_nearest_vet",
+            "mcp__alha__send_notification",
+            "mcp__alha__save_consultation",
+        ]
+
+        # --- Seeded vet data (3 vets: 2 cattle at different distances, 1 poultry filtered out) ---
+        _SEEDED_VETS = [
+            {   # vet-001 — closest cattle vet, same city as farmer (~0.2 km from test point)
+                "vet_id": {"S": "vet-001"}, "name": {"S": "Dr. Priya Sharma"},
+                "phone": {"S": "+919765432101"}, "speciality": {"S": "cattle"},
+                "lat": {"N": "18.5210"}, "lon": {"N": "73.8580"},
+                "district": {"S": "Pune"}, "state": {"S": "Maharashtra"},
+            },
+            {   # vet-002 — farther cattle vet (~145 km, Mumbai)
+                "vet_id": {"S": "vet-002"}, "name": {"S": "Dr. Ramesh Patel"},
+                "phone": {"S": "+919876543210"}, "speciality": {"S": "cattle"},
+                "lat": {"N": "19.0760"}, "lon": {"N": "72.8777"},
+                "district": {"S": "Mumbai"}, "state": {"S": "Maharashtra"},
+            },
+            {   # vet-003 — poultry vet (must be filtered out for cattle query)
+                "vet_id": {"S": "vet-003"}, "name": {"S": "Dr. Anita Singh"},
+                "phone": {"S": "+919654321012"}, "speciality": {"S": "poultry"},
+                "lat": {"N": "18.5195"}, "lon": {"N": "73.8553"},
+                "district": {"S": "Pune"}, "state": {"S": "Maharashtra"},
+            },
+        ]
+
+        # Mock AWS clients
+        mock_dynamo_fnv = MagicMock()
+        mock_dynamo_fnv.scan.return_value = {
+            "Items": _SEEDED_VETS, "Count": 3, "ScannedCount": 3,
+            # No LastEvaluatedKey → single page, no pagination needed
+        }
+        mock_dynamo_sc = MagicMock()
+        mock_dynamo_sc.put_item.return_value = {}
+        mock_sns = MagicMock()
+        mock_sns.publish.return_value = {"MessageId": "mock-sns-001"}
+
+        with (
+            patch.object(_fnv_mod, "_dynamodb", mock_dynamo_fnv),
+            patch.object(_sc_mod, "_dynamodb", mock_dynamo_sc),
+            patch.object(_sn_mod, "_sns", mock_sns),
+        ):
+            # ------------------------------------------------------------------
+            # PHASE 1 — Disease report → Claude calls assess_severity, request_gps
+            # ------------------------------------------------------------------
+            if mode in ("epic4", "epic4-phase1"):
+                msg_p1 = (
+                    "[session_id: debug-epic4-001]\n[language: en]\n[farmer_phone: +919000000001]\n"
+                    "Farmer: My cattle (cow) has lumpy skin disease. "
+                    "Diagnosis is confirmed: lumpy_skin_disease, confidence 94%, cattle. "
+                    "Symptoms: multiple skin nodules, high fever (~104F), loss of appetite. "
+                    "Knowledge base has been queried and treatment guidance provided. "
+                    "Now please assess severity and coordinate vet dispatch."
+                )
+
+                async def prompt_p1():
+                    yield {
+                        "type": "user", "session_id": "",
+                        "message": {"role": "user", "content": msg_p1},
+                        "parent_tool_use_id": None,
+                    }
+
+                await run_test(
+                    label="Epic 4 - Phase 1: disease report -> assess_severity + request_gps",
+                    prompt=prompt_p1(),
+                    allowed_tools=_ALLOWED_TOOLS,
+                    mcp_servers={"alha": mcp_server},
+                    max_turns=15,
+                    system_prompt=alha_system_prompt,
+                )
+
+            # ------------------------------------------------------------------
+            # PHASE 2 — GPS received → Claude calls find_nearest_vet, send_notification, save_consultation
+            # ------------------------------------------------------------------
+            if mode in ("epic4", "epic4-phase2"):
+                msg_p2 = (
+                    "[session_id: debug-epic4-001]\n[language: en]\n[farmer_phone: +919000000001]\n"
+                    "GPS coordinates received. lat=18.5204, lon=73.8567. "
+                    "Context from earlier in this consultation: "
+                    "disease_name=lumpy_skin_disease, animal_type=cattle, severity=CRITICAL, "
+                    "confidence_score=94, "
+                    "treatment_summary='Isolate affected animal immediately. Anti-inflammatory drugs. "
+                    "Notify local animal husbandry department. Vaccinate remaining herd.', "
+                    "kb_citations=['lumpy-skin-disease-protocol-v2', 'maharashtra-livestock-advisory-2024']. "
+                    "Please call find_nearest_vet, then send_notification, then save_consultation."
+                )
+
+                async def prompt_p2():
+                    yield {
+                        "type": "user", "session_id": "",
+                        "message": {"role": "user", "content": msg_p2},
+                        "parent_tool_use_id": None,
+                    }
+
+                await run_test(
+                    label="Epic 4 - Phase 2: GPS received -> find_nearest_vet + send_notification + save_consultation",
+                    prompt=prompt_p2(),
+                    allowed_tools=_ALLOWED_TOOLS,
+                    mcp_servers={"alha": mcp_server},
+                    max_turns=15,
+                    system_prompt=alha_system_prompt,
+                )
+
+        # --- Mock call summary (outside patch context, records still accessible) ---
+        print(f"\n{'='*60}", flush=True)
+        print("MOCK AWS CALL SUMMARY", flush=True)
+        print(f"  DynamoDB scan    (find_nearest_vet): {mock_dynamo_fnv.scan.call_count} call(s)", flush=True)
+        print(f"  DynamoDB put_item (save_consultation): {mock_dynamo_sc.put_item.call_count} call(s)", flush=True)
+        print(f"  SNS publish       (send_notification): {mock_sns.publish.call_count} call(s)", flush=True)
+        if mock_sns.publish.call_count > 0:
+            for i, call in enumerate(mock_sns.publish.call_args_list):
+                kw = call.kwargs
+                phone = kw.get("PhoneNumber", "?")
+                msg_preview = kw.get("Message", "")[:90]
+                sms_type = kw.get("MessageAttributes", {}).get(
+                    "AWS.SNS.SMS.SMSType", {}
+                ).get("StringValue", "?")
+                print(f"    SMS [{i+1}] to={phone} type={sms_type}: {msg_preview}...", flush=True)
+        if mock_dynamo_sc.put_item.call_count > 0:
+            call_kw = mock_dynamo_sc.put_item.call_args.kwargs
+            item = call_kw.get("Item", {})
+            print(f"  DynamoDB item keys: {list(item.keys())}", flush=True)
+            print(f"    session_id : {item.get('session_id', {}).get('S', '?')}", flush=True)
+            print(f"    disease    : {item.get('disease_name', {}).get('S', '?')}", flush=True)
+            print(f"    severity   : {item.get('severity', {}).get('S', '?')}", flush=True)
+            print(f"    farmer_phone (redacted): {item.get('farmer_phone', {}).get('S', '?')}", flush=True)
+            print(f"    vet_phone (redacted)   : {item.get('vet_phone', {}).get('S', '?')}", flush=True)
+        print(f"{'='*60}", flush=True)
+
     else:
         # Test 1: basic SDK, no tools (original smoke test)
         await run_test(

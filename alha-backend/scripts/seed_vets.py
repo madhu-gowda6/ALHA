@@ -6,6 +6,7 @@ Usage:
 """
 import os
 import sys
+from decimal import Decimal
 
 import boto3
 import structlog
@@ -18,20 +19,20 @@ DEMO_VETS = [
         "name": "Dr. Ramesh Gupta",
         "phone": "+919100000001",
         "speciality": "cattle",
-        "lat": 26.8467,
-        "lon": 80.9462,
-        "district": "Lucknow",
-        "state": "Uttar Pradesh",
+        "lat": 12.8720,
+        "lon": 77.6513,
+        "district": "Bengaluru",
+        "state": "Karnataka",
     },
     {
         "vet_id": "vet-002",
-        "name": "Dr. Priya Sharma",
+        "name": "Dr. Madhu Gowda",
         "phone": "+919100000002",
         "speciality": "poultry",
-        "lat": 26.9124,
-        "lon": 75.7873,
-        "district": "Jaipur",
-        "state": "Rajasthan",
+        "lat": 12.8697,
+        "lon": 77.6580,
+        "district": "Bengaluru",
+        "state": "Karnataka",
     },
     {
         "vet_id": "vet-003",
@@ -51,7 +52,10 @@ def seed_vets(table_name: str, region: str = "us-east-1") -> None:
     table = dynamodb.Table(table_name)
 
     for vet in DEMO_VETS:
-        table.put_item(Item=vet)
+        item = dict(vet)
+        item["lat"] = Decimal(str(vet["lat"]))
+        item["lon"] = Decimal(str(vet["lon"]))
+        table.put_item(Item=item)
         log.info("vet_seeded", vet_id=vet["vet_id"], name=vet["name"])
 
     log.info("seed_complete", vet_count=len(DEMO_VETS))

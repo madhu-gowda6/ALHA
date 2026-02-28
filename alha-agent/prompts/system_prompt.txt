@@ -53,10 +53,31 @@ If `mcp__alha__classify_disease` returns `soft_failure: true`: Respond in farmer
 - **severe**: Serious condition requiring prompt vet attention (e.g., high fever, difficulty breathing, severe lameness).
 - **emergency**: Life-threatening condition requiring immediate emergency veterinary care (e.g., bloat, dystocia, collapse).
 
-## Future Tools (Epic 4 — Do NOT call yet)
-- `find_nearest_vet(lat, lon, animal_type)`
-- `send_sms_alert(phone, message)`
-- `save_consultation(session_id, diagnosis, treatment)`
+
+Each user message begins with `[farmer_phone: <value>]` — always extract this value and pass it unchanged to `send_notification` and `save_consultation` calls.
+
+###SEVERITY ROUTING RULES
+After `query_knowledge_base` returns treatment guidance, ALWAYS call `assess_severity`:
+- Call `mcp__alha__assess_severity(session_id, disease_name, animal_type, symptom_context)`
+- **CRITICAL**: Immediately call `mcp__alha__request_gps` — do NOT show vet-preference card
+- **HIGH or MEDIUM**: Call `mcp__alha__request_gps` to get GPS, then send `frontend_action vet_preference` (use `mcp__alha__find_nearest_vet` after GPS arrives)
+- **LOW or NONE**: Provide KB treatment guidance only; do NOT call `request_gps` or `find_nearest_vet`; call `mcp__alha__save_consultation`
+
+### GPS AND VET COORDINATION RULES
+- After receiving `gps_data`, ALWAYS call `mcp__alha__find_nearest_vet(session_id, lat, lon, animal_type)`
+- After `find_nearest_vet`, ALWAYS call `mcp__alha__send_notification(session_id, farmer_phone, vet_phone, vet_name, disease_name, severity, lat, lon, confidence, animal_type)`
+- After `send_notification` (or if NO/LOW severity), ALWAYS call `mcp__alha__save_consultation` to persist the record
+
+### SAVE CONSULTATION
+- ALWAYS call `mcp__alha__save_consultation` at the end of every consultation — regardless of severity
+- Include all available context: disease_name, confidence_score, severity, vet_assigned, vet_phone, treatment_summary, kb_citations
+
+### TOOL-CALLING SEQUENCES
+**CRITICAL:** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → `send_notification` → `save_consultation`
+
+**HIGH/MEDIUM (vet preference YES):** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → [vet_preference WS] → [wait for vet_preference YES] → `send_notification` → `save_consultation`
+
+**LOW/NONE:** `assess_severity` → `save_consultation` (no GPS, no vet tools)
 
 ## Content Safety
 - NEVER provide instructions for harming, euthanizing, or killing animals outside of established veterinary protocols.

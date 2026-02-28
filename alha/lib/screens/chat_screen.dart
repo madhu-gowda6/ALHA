@@ -8,15 +8,18 @@ import '../models/message.dart';
 import '../providers/camera_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
+import '../services/location_service.dart';
 import '../services/speech_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/camera_overlay.dart';
 import '../widgets/image_bubble.dart';
 import '../widgets/input_bar.dart';
 import '../widgets/language_toggle.dart';
+import '../widgets/severity_badge.dart';
 import '../widgets/symptom_interview_overlay.dart';
 import '../widgets/text_bubble.dart';
 import '../widgets/typing_indicator.dart';
+import '../widgets/vet_card.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -28,6 +31,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _wsService = WebSocketService();
   final _speechService = SpeechService();
+  final _locationService = LocationService();
   final _scrollController = ScrollController();
   final _inputBarKey = GlobalKey<InputBarState>();
 
@@ -35,7 +39,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   StreamSubscription? _wsStateSub;
   StreamSubscription? _symptomSub;
   StreamSubscription? _cameraSub;
+  StreamSubscription? _gpsSub;
+  StreamSubscription? _vetPrefSub;
   bool _isListening = false;
+  bool _showGpsRequest = false;
+  bool _showVetPreference = false;
 
   @override
   void initState() {
@@ -72,6 +80,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .read(chatProvider.notifier)
         .cameraOverlayTrigger
         .listen((_) => _showCameraOverlay());
+
+    _gpsSub = ref
+        .read(chatProvider.notifier)
+        .gpsRequestTrigger
+        .listen((_) {
+      // Show inline GPS card — geolocation MUST be called from a user gesture
+      // (button tap) for Chrome to show the permission dialog.
+      if (mounted) setState(() => _showGpsRequest = true);
+      _scrollToBottom();
+    });
+
+    _vetPrefSub = ref
+        .read(chatProvider.notifier)
+        .vetPreferenceTrigger
+        .listen((_) {
+      if (mounted) setState(() => _showVetPreference = true);
+    });
 
     _wsService.connect(AppConfig.wsUrl, token);
   }
@@ -119,6 +144,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ref.read(chatProvider.notifier).clearCameraOverlayPending();
       }
     });
+  }
+
+  Future<void> _handleGpsRequest() async {
+    if (!mounted) return;
+    setState(() => _showGpsRequest = false);
+    final session = ref.read(sessionProvider);
+    final result = await _locationService.getCurrentLocation();
+    if (!mounted) return;
+    if (result.success) {
+      ref.read(chatProvider.notifier).sendGpsData(
+            result.lat!,
+            result.lon!,
+            session.sessionId ?? '',
+          );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.errorMessage ?? 'Location unavailable'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      ref.read(chatProvider.notifier).clearGpsRequestPending();
+    }
   }
 
   void _showReconnectSnackBar() {
@@ -215,6 +263,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _wsStateSub?.cancel();
     _symptomSub?.cancel();
     _cameraSub?.cancel();
+    _gpsSub?.cancel();
+    _vetPrefSub?.cancel();
     _wsService.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -240,7 +290,129 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
 
+    if (msg.type == MessageType.severity && msg.severityLevel != null) {
+      return SeverityBadge(level: msg.severityLevel!);
+    }
+
+    if (msg.type == MessageType.vetFound && msg.vetData != null) {
+      return VetCard(
+        name: msg.vetData!.name,
+        speciality: msg.vetData!.speciality,
+        distanceKm: msg.vetData!.distanceKm,
+        phone: msg.vetData!.phone,
+      );
+    }
+
     return TextBubble(message: msg);
+  }
+
+  Widget _buildGpsRequestCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.location_on, color: Colors.blue.shade700, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'We need your location to find the nearest vet.\n'
+                  'सबसे नज़दीकी पशु चिकित्सक खोजने के लिए आपका स्थान चाहिए।',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue.shade900,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.my_location),
+              label: const Text('Share Location / स्थान साझा करें'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[700],
+                foregroundColor: Colors.white,
+                minimumSize: const Size(0, 48),
+              ),
+              // Called from button tap → user gesture → Chrome shows permission dialog
+              onPressed: _handleGpsRequest,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVetPreferenceCard(String sessionId) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Connect with this vet? / इस पशु चिकित्सक से जोड़ें?',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.green.shade900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green[700],
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    setState(() => _showVetPreference = false);
+                    ref
+                        .read(chatProvider.notifier)
+                        .sendVetPreference('yes', sessionId);
+                  },
+                  child: const Text('Yes / हाँ'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.green[700],
+                    side: BorderSide(color: Colors.green.shade400),
+                  ),
+                  onPressed: () {
+                    setState(() => _showVetPreference = false);
+                    ref
+                        .read(chatProvider.notifier)
+                        .sendVetPreference('no', sessionId);
+                  },
+                  child: const Text('No / नहीं'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -248,6 +420,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final session = ref.watch(sessionProvider);
     final chat = ref.watch(chatProvider);
     final connState = session.connectionState;
+    final inputDisabled = chat.isStreaming || chat.sessionComplete;
 
     return Scaffold(
       appBar: AppBar(
@@ -285,10 +458,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   _buildMessageItem(i, chat, session.language),
             ),
           ),
+          if (_showGpsRequest) _buildGpsRequestCard(),
+          if (_showVetPreference)
+            _buildVetPreferenceCard(session.sessionId ?? ''),
           InputBar(
             key: _inputBarKey,
             onSubmit: _sendMessage,
-            disabled: chat.isStreaming,
+            disabled: inputDisabled,
             onVoicePressed: _toggleVoice,
             isListening: _isListening,
           ),

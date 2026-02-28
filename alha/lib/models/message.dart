@@ -1,4 +1,4 @@
-enum MessageType { text, image, error, system, typing, diagnosis }
+enum MessageType { text, image, error, system, typing, diagnosis, severity, vetFound }
 
 class BboxData {
   final double left;
@@ -44,6 +44,27 @@ class DiagnosisData {
       );
 }
 
+class VetData {
+  final String name;
+  final String speciality;
+  final double distanceKm;
+  final String phone;
+
+  const VetData({
+    required this.name,
+    required this.speciality,
+    required this.distanceKm,
+    required this.phone,
+  });
+
+  factory VetData.fromJson(Map<String, dynamic> json) => VetData(
+        name: json['name'] as String? ?? '',
+        speciality: json['speciality'] as String? ?? '',
+        distanceKm: (json['distance_km'] as num?)?.toDouble() ?? 0.0,
+        phone: json['phone'] as String? ?? '',
+      );
+}
+
 class Message {
   final String id;
   final String content;
@@ -54,6 +75,8 @@ class Message {
   final String? messageHi;
   final String? imageUrl;
   final DiagnosisData? diagnosisData;
+  final String? severityLevel;
+  final VetData? vetData;
 
   const Message({
     required this.id,
@@ -65,6 +88,8 @@ class Message {
     this.messageHi,
     this.imageUrl,
     this.diagnosisData,
+    this.severityLevel,
+    this.vetData,
   });
 
   Message copyWith({String? content}) => Message(
@@ -77,6 +102,8 @@ class Message {
         messageHi: messageHi,
         imageUrl: imageUrl,
         diagnosisData: diagnosisData,
+        severityLevel: severityLevel,
+        vetData: vetData,
       );
 
   factory Message.fromWsMessage(Map<String, dynamic> json) {
@@ -109,5 +136,31 @@ class Message {
         timestamp: DateTime.now(),
         type: MessageType.diagnosis,
         diagnosisData: DiagnosisData.fromJson(json),
+      );
+
+  factory Message.severity(String level) => Message(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        content: 'Severity: $level',
+        isUser: false,
+        timestamp: DateTime.now(),
+        type: MessageType.severity,
+        severityLevel: level,
+      );
+
+  factory Message.vetFound(VetData vet) => Message(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        content: 'Vet: ${vet.name}',
+        isUser: false,
+        timestamp: DateTime.now(),
+        type: MessageType.vetFound,
+        vetData: vet,
+      );
+
+  factory Message.systemMessage(String text) => Message(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        content: text,
+        isUser: false,
+        timestamp: DateTime.now(),
+        type: MessageType.system,
       );
 }
