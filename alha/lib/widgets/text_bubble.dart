@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../config/theme.dart';
@@ -31,7 +32,7 @@ class TextBubble extends StatelessWidget {
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.8,
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
         ),
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -51,13 +52,20 @@ class TextBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                message.content,
-                style: GoogleFonts.notoSansDevanagari(
-                  color: isError ? Colors.red.shade800 : textColor,
-                  fontSize: 15,
-                ),
-              ),
+              isUser
+                  ? Text(
+                      message.content,
+                      style: GoogleFonts.notoSansDevanagari(
+                        color: textColor,
+                        fontSize: 15,
+                      ),
+                    )
+                  : MarkdownBody(
+                      data: message.content,
+                      shrinkWrap: true,
+                      softLineBreak: true,
+                      styleSheet: _buildStyleSheet(context, textColor, isError),
+                    ),
               const SizedBox(height: 4),
               Text(
                 _formatTime(message.timestamp),
@@ -69,6 +77,35 @@ class TextBubble extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  MarkdownStyleSheet _buildStyleSheet(
+      BuildContext context, Color textColor, bool isError) {
+    final base = GoogleFonts.notoSansDevanagari(
+      color: isError ? Colors.red.shade800 : textColor,
+      fontSize: 15,
+    );
+    return MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+      p: base,
+      h1: base.copyWith(fontSize: 18, fontWeight: FontWeight.bold),
+      h2: base.copyWith(fontSize: 16, fontWeight: FontWeight.bold),
+      h3: base.copyWith(fontSize: 15, fontWeight: FontWeight.bold),
+      strong: base.copyWith(fontWeight: FontWeight.bold),
+      em: base.copyWith(fontStyle: FontStyle.italic),
+      listBullet: base,
+      tableHead: base.copyWith(fontWeight: FontWeight.bold),
+      tableBody: base,
+      tableBorder: TableBorder.all(color: Colors.grey.shade300, width: 1),
+      tableHeadAlign: TextAlign.left,
+      tableCellsPadding:
+          const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      blockquote: base.copyWith(color: Colors.grey.shade700),
+      code: GoogleFonts.robotoMono(
+        fontSize: 13,
+        backgroundColor: Colors.grey.shade100,
+        color: Colors.black87,
       ),
     );
   }
