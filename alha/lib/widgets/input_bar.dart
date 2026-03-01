@@ -49,9 +49,11 @@ class InputBarState extends State<InputBar> {
 
   /// Called externally when voice recognition produces a transcript.
   void setVoiceText(String text) {
-    _controller.text = text;
+    final existing = _controller.text;
+    final newText = existing.isEmpty ? text : '$existing $text';
+    _controller.text = newText;
     _controller.selection = TextSelection.fromPosition(
-      TextPosition(offset: text.length),
+      TextPosition(offset: newText.length),
     );
   }
 

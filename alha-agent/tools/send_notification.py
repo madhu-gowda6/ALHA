@@ -78,10 +78,12 @@ async def send_notification(args: dict) -> dict:
         f"सबसे नजदीकी पशु चिकित्सक: {vet_name}."
     )
 
+    maps_link = f"https://maps.google.com/?q={lat:.6f},{lon:.6f}"
+
     vet_msg = (
-        f"ALHA Emergency: Farmer at ({lat:.4f}, {lon:.4f}) has reported "
-        f"{disease_name} ({severity}) in their {animal_type}. "
-        f"Confidence: {confidence:.0f}%. Please respond immediately."
+        f"ALHA Emergency: Farmer has reported {disease_name} ({severity}) "
+        f"in their {animal_type}. Confidence: {confidence:.0f}%. "
+        f"Location: {maps_link}. Please respond immediately."
     )
 
     try:

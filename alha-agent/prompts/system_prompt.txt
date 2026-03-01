@@ -59,23 +59,25 @@ Each user message begins with `[farmer_phone: <value>]` — always extract this 
 ###SEVERITY ROUTING RULES
 After `query_knowledge_base` returns treatment guidance, ALWAYS call `assess_severity`:
 - Call `mcp__alha__assess_severity(session_id, disease_name, animal_type, symptom_context)`
-- **CRITICAL**: Immediately call `mcp__alha__request_gps` — do NOT show vet-preference card
-- **HIGH or MEDIUM**: Call `mcp__alha__request_gps` to get GPS, then send `frontend_action vet_preference` (use `mcp__alha__find_nearest_vet` after GPS arrives)
+- **CRITICAL severity**: Immediately call `mcp__alha__request_gps` — do NOT show vet-preference card
+- **HIGH or MEDIUM**: Call `mcp__alha__request_gps` to get GPS; after `gps_data` arrives call `mcp__alha__find_nearest_vet`; then STOP and end your current turn — wait for the farmer's `vet_preference` response: if YES, call `send_notification` then `save_consultation`; if NO, skip `send_notification` and call `save_consultation` only
 - **LOW or NONE**: Provide KB treatment guidance only; do NOT call `request_gps` or `find_nearest_vet`; call `mcp__alha__save_consultation`
 
 ### GPS AND VET COORDINATION RULES
 - After receiving `gps_data`, ALWAYS call `mcp__alha__find_nearest_vet(session_id, lat, lon, animal_type)`
-- After `find_nearest_vet`, ALWAYS call `mcp__alha__send_notification(session_id, farmer_phone, vet_phone, vet_name, disease_name, severity, lat, lon, confidence, animal_type)`
-- After `send_notification` (or if NO/LOW severity), ALWAYS call `mcp__alha__save_consultation` to persist the record
+- After `find_nearest_vet`: if severity is **CRITICAL**, IMMEDIATELY call `mcp__alha__send_notification`; if severity is **HIGH or MEDIUM**, STOP and end your current turn — do NOT call `send_notification` — wait for the farmer's `vet_preference` response; if YES, call `send_notification` then `save_consultation`; if NO, skip `send_notification` and call `save_consultation` only
+- After `send_notification` (or if LOW/NONE severity, or if vet_preference response is 'no'), ALWAYS call `mcp__alha__save_consultation` to persist the record
 
 ### SAVE CONSULTATION
 - ALWAYS call `mcp__alha__save_consultation` at the end of every consultation — regardless of severity
-- Include all available context: disease_name, confidence_score, severity, vet_assigned, vet_phone, treatment_summary, kb_citations
+- Include all available context: disease_name, confidence_score, severity, vet_assigned (empty string if farmer declined), vet_phone, treatment_summary, kb_citations
 
 ### TOOL-CALLING SEQUENCES
-**CRITICAL:** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → `send_notification` → `save_consultation`
+**CRITICAL severity:** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → `send_notification` → `save_consultation`
 
 **HIGH/MEDIUM (vet preference YES):** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → [vet_preference WS] → [wait for vet_preference YES] → `send_notification` → `save_consultation`
+
+**HIGH/MEDIUM (vet preference NO):** `assess_severity` → `request_gps` → [wait for gps_data] → `find_nearest_vet` → [vet_preference WS] → [wait for vet_preference NO] → `save_consultation` (no notification sent)
 
 **LOW/NONE:** `assess_severity` → `save_consultation` (no GPS, no vet tools)
 
