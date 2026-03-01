@@ -18,6 +18,7 @@ import '../widgets/language_toggle.dart';
 import '../widgets/severity_badge.dart';
 import '../widgets/symptom_interview_overlay.dart';
 import '../widgets/text_bubble.dart';
+import 'history_screen.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/vet_card.dart';
 
@@ -435,7 +436,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.history),
             onPressed: () {
-              // History screen — Epic 5 (stub)
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const HistoryScreen()),
+              );
             },
             tooltip: 'Chat History',
           ),

@@ -1,11 +1,20 @@
+import importlib.util
 import json
-import sys
 import os
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'functions', 'notification_handler'))
-
-from app import auth_handler
+# Load notification_handler/app.py by path with a unique module name so it does
+# not pollute sys.modules['app'] and break other Lambda test files.
+_NH_APP_PATH = os.path.join(os.path.dirname(__file__), '..', 'functions', 'notification_handler', 'app.py')
+import sys
+if "notification_handler_app" in sys.modules:
+    _nh_module = sys.modules["notification_handler_app"]
+else:
+    _spec = importlib.util.spec_from_file_location("notification_handler_app", _NH_APP_PATH)
+    _nh_module = importlib.util.module_from_spec(_spec)
+    sys.modules["notification_handler_app"] = _nh_module
+    _spec.loader.exec_module(_nh_module)
+auth_handler = _nh_module.auth_handler
 
 
 def _event(username="raju", password="Demo@1234"):

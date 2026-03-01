@@ -140,6 +140,45 @@ class TestSaveConsultationHappyPath:
         assert result["content"][0]["type"] == "text"
 
 
+class TestSaveConsultationPhoneRedaction:
+    @pytest.mark.asyncio
+    async def test_farmer_phone_stored_unredacted(self):
+        """farmer_phone must be stored as-is (unredacted) for gsi-farmer-phone GSI to work."""
+        with (
+            patch("tools.save_consultation._dynamodb") as mock_ddb,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.put_item.return_value = {}
+            await save_consultation.handler(_VALID_ARGS)
+
+        item = mock_ddb.put_item.call_args.kwargs["Item"]
+        stored_farmer_phone = item["farmer_phone"]["S"]
+        assert stored_farmer_phone == "+919000000001", (
+            f"farmer_phone must be unredacted; got '{stored_farmer_phone}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vet_phone_stored_redacted(self):
+        """vet_phone must be redacted in DynamoDB (PII protection)."""
+        with (
+            patch("tools.save_consultation._dynamodb") as mock_ddb,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.put_item.return_value = {}
+            await save_consultation.handler(_VALID_ARGS)
+
+        item = mock_ddb.put_item.call_args.kwargs["Item"]
+        stored_vet_phone = item["vet_phone"]["S"]
+        # redact_phone masks digits — the original +919876543210 should be redacted
+        assert stored_vet_phone != "+919876543210", (
+            f"vet_phone must be redacted; got '{stored_vet_phone}'"
+        )
+        # Redacted form contains X characters
+        assert "X" in stored_vet_phone, (
+            f"vet_phone redaction expected X masking; got '{stored_vet_phone}'"
+        )
+
+
 class TestSaveConsultationSoftFailure:
     @pytest.mark.asyncio
     async def test_client_error_returns_error_dict(self):

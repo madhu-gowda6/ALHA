@@ -10,37 +10,34 @@ class SeverityBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final (bgColor, textColor, label, labelHi) = _resolve(level);
 
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: GoogleFonts.notoSans(
-                color: textColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.notoSans(
+              color: textColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
             ),
-            Text(
-              labelHi,
-              style: GoogleFonts.notoSansDevanagari(
-                color: textColor.withValues(alpha: 0.85),
-                fontSize: 12,
-              ),
+          ),
+          Text(
+            labelHi,
+            style: GoogleFonts.notoSansDevanagari(
+              color: textColor.withValues(alpha: 0.85),
+              fontSize: 12,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

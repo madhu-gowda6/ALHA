@@ -33,6 +33,7 @@ app.add_middleware(
 # Module-level AWS clients — created once, reused per request
 _cognito = boto3.client("cognito-idp", region_name=config.aws_region)
 _s3 = boto3.client("s3", region_name=config.aws_region)
+_dynamodb = boto3.client("dynamodb", region_name=config.aws_region)
 
 # JWKS cache — refreshed on validation failure
 _jwks: Optional[dict] = None
@@ -599,5 +600,59 @@ async def upload_url(
 
 
 @app.get("/api/history")
-async def history():
-    return {"success": True, "data": [], "error": None}
+async def history(authorization: Optional[str] = Header(default=None)):
+    token = (authorization or "").replace("Bearer ", "").strip()
+    if not token:
+        return JSONResponse(status_code=401, content={
+            "success": False, "data": None,
+            "error": {"message": "Unauthorized", "message_hi": "अनधिकृत"},
+        })
+    try:
+        claims = await _validate_jwt(token)
+        farmer_phone = claims.get("phone_number", "")
+    except Exception:
+        return JSONResponse(status_code=401, content={
+            "success": False, "data": None,
+            "error": {"message": "Invalid token", "message_hi": "अमान्य टोकन"},
+        })
+
+    if not farmer_phone:
+        return JSONResponse(status_code=400, content={
+            "success": False, "data": None,
+            "error": {"message": "Phone number not found in token", "message_hi": "टोकन में फोन नंबर नहीं मिला"},
+        })
+
+    try:
+        response = _dynamodb.query(
+            TableName=config.consultations_table,
+            IndexName="gsi-farmer-phone",
+            KeyConditionExpression="farmer_phone = :phone",
+            ExpressionAttributeValues={":phone": {"S": farmer_phone}},
+            ScanIndexForward=False,  # no-op (GSI has no sort key); app sort below
+        )
+        items = response.get("Items", [])
+        consultations = []
+        for item in items:
+            consultations.append({
+                "consultation_id": item.get("session_id", {}).get("S", ""),
+                "animal_type": item.get("animal_type", {}).get("S", ""),
+                "disease_name": item.get("disease_name", {}).get("S", ""),
+                "confidence_score": float(item.get("confidence_score", {}).get("N", "0")),
+                "severity": item.get("severity", {}).get("S", ""),
+                "vet_assigned": item.get("vet_assigned", {}).get("S", ""),
+                "treatment_summary": item.get("treatment_summary", {}).get("S", ""),
+                "kb_citations": item.get("kb_citations", {}).get("S", "[]"),
+                "timestamp": item.get("timestamp", {}).get("S", ""),
+            })
+        consultations.sort(key=lambda c: c["timestamp"], reverse=True)
+        return {"success": True, "data": consultations, "error": None}
+    except Exception as e:
+        log.error(
+            "history_dynamo_error",
+            error=str(e),
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
+        return JSONResponse(status_code=500, content={
+            "success": False, "data": None,
+            "error": {"message": "Internal server error", "message_hi": "इतिहास लोड करने में त्रुटि"},
+        })

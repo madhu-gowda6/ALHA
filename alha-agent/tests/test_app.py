@@ -31,13 +31,13 @@ class TestStubEndpoints:
         assert body["success"] is True
         assert body["error"] is None
 
-    def test_history_returns_200(self):
+    def test_history_returns_401_without_token(self):
         response = client.get("/api/history")
-        assert response.status_code == 200
+        assert response.status_code == 401
 
-    def test_history_returns_list(self):
+    def test_history_returns_401_success_false_without_token(self):
         body = client.get("/api/history").json()
-        assert isinstance(body["data"], list)
+        assert body["success"] is False
 
     def test_auth_login_requires_body(self):
         # Now requires username/password body — no body → 422 Unprocessable Entity

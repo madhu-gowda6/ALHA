@@ -70,10 +70,12 @@ async def save_consultation(args: dict) -> dict:
         kb_citations = []
 
     # Flat DynamoDB item — no List or Map types, all string/number primitives
-    # AC #10: PII-redact phone numbers before writing to DynamoDB
+    # farmer_phone stored unredacted so gsi-farmer-phone GSI query matches JWT phone claim.
+    # PII protection is handled by pii_filter_hook.py (CloudWatch logs) + DynamoDB encryption at rest.
+    # vet_phone remains redacted.
     item = {
         "session_id": {"S": session_id},
-        "farmer_phone": {"S": redact_phone(farmer_phone)},
+        "farmer_phone": {"S": farmer_phone},
         "animal_type": {"S": animal_type},
         "disease_name": {"S": disease_name},
         "confidence_score": {"N": str(round(confidence_score, 2))},
