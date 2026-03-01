@@ -1,5 +1,6 @@
 """Tool: classify_disease — run Rekognition custom labels on uploaded image."""
 import asyncio
+import base64
 import json
 from datetime import datetime
 
@@ -15,46 +16,8 @@ log = structlog.get_logger()
 # Module-level boto3 clients — created once, reused per call
 _rekognition = boto3.client("rekognition", region_name=config.aws_region)
 _dynamodb = boto3.client("dynamodb", region_name=config.aws_region)
-
-
-# ==== MOCK START: REMOVE BEFORE PRODUCTION ====
-# Mimics a real Rekognition detect_custom_labels response with realistic
-# disease labels and bounding boxes per animal type.
-# Activated when REKOGNITION_MOCK=true in environment.
-# To remove: delete this function and the _mock_classify() call in classify_disease().
-_MOCK_DISEASES: dict[str, dict] = {
-    "cattle": {
-        "Name": "lumpy_skin_disease",
-        "Confidence": 87.5,
-        "Geometry": {
-            "BoundingBox": {"Left": 0.28, "Top": 0.22, "Width": 0.44, "Height": 0.38}
-        },
-    },
-    "poultry": {
-        "Name": "newcastle_disease",
-        "Confidence": 82.3,
-        "Geometry": {
-            "BoundingBox": {"Left": 0.31, "Top": 0.19, "Width": 0.38, "Height": 0.42}
-        },
-    },
-    "buffalo": {
-        "Name": "foot_and_mouth",
-        "Confidence": 79.1,
-        "Geometry": {
-            "BoundingBox": {"Left": 0.25, "Top": 0.30, "Width": 0.50, "Height": 0.35}
-        },
-    },
-}
-
-
-def _mock_rekognition_response(animal_type: str) -> list[dict]:
-    """Return a fake Rekognition CustomLabels list for the given animal type.
-    Falls back to cattle if animal_type is unrecognised.
-    MOCK — REMOVE BEFORE PRODUCTION.
-    """
-    label = _MOCK_DISEASES.get(animal_type, _MOCK_DISEASES["cattle"])
-    return [label]
-# ==== MOCK END ====
+_s3 = boto3.client("s3", region_name=config.aws_region)
+_bedrock_runtime = boto3.client("bedrock-runtime", region_name=config.aws_region)
 
 
 def _get_model_arn(animal_type: str) -> str:
@@ -79,6 +42,60 @@ def _get_model_arn(animal_type: str) -> str:
     if animal_type == "poultry":
         return config.rekognition_poultry_arn
     return config.rekognition_cattle_arn
+
+
+async def _claude_classify_image(s3_key: str, animal_type: str) -> dict:
+    """Classify livestock disease from S3 image using Claude vision via Bedrock."""
+    obj = _s3.get_object(Bucket=config.s3_image_bucket, Key=s3_key)
+    image_bytes = obj["Body"].read()
+    b64_data = base64.b64encode(image_bytes).decode("utf-8")
+
+    prompt = (
+        f"You are a veterinary disease detection AI. Analyse this image of a {animal_type}. "
+        "Identify the most visible disease or health condition. "
+        "Respond ONLY with valid JSON, no markdown, no extra text: "
+        '{"disease": "<snake_case_disease_name or null>", "confidence": <0-100>, '
+        '"bbox": {"left": <0-1>, "top": <0-1>, "width": <0-1>, "height": <0-1>} or null}'
+    )
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 256,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/jpeg", "data": b64_data,
+                }},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    })
+
+    loop = asyncio.get_running_loop()
+    response = await loop.run_in_executor(
+        None,
+        lambda: _bedrock_runtime.invoke_model(
+            modelId=config.bedrock_vision_model_id,
+            contentType="application/json",
+            accept="application/json",
+            body=body,
+        ),
+    )
+    response_body = json.loads(response["body"].read())
+    parsed = json.loads(response_body["content"][0]["text"].strip())
+
+    disease = parsed.get("disease") or None
+    confidence = round(float(parsed.get("confidence", 0.0)), 2)
+    raw_bbox = parsed.get("bbox")
+    bbox = None
+    if raw_bbox and disease:
+        bbox = {
+            "left":   max(0.0, min(1.0, float(raw_bbox.get("left",   0.0)))),
+            "top":    max(0.0, min(1.0, float(raw_bbox.get("top",    0.0)))),
+            "width":  max(0.0, min(1.0, float(raw_bbox.get("width",  0.0)))),
+            "height": max(0.0, min(1.0, float(raw_bbox.get("height", 0.0)))),
+        }
+    return {"disease": disease, "confidence": confidence, "bbox": bbox}
 
 
 @tool(
@@ -130,147 +147,167 @@ async def classify_disease(args: dict) -> dict:
     start_time = datetime.utcnow()
 
     try:
-        # ==== MOCK START: REMOVE BEFORE PRODUCTION ====
-        # Bypasses DynamoDB ARN lookup and real Rekognition when REKOGNITION_MOCK=true.
-        # Replace this entire block with the real call below once models are trained and running.
+        # Branch 1: Claude-only (mock mode / Rekognition not configured)
         if config.rekognition_mock:
             log.warning(
-                "rekognition_mock_active",
+                "rekognition_mock_active_using_claude",
                 session_id=session_id,
                 animal_type=animal_type,
                 timestamp=datetime.utcnow().isoformat() + "Z",
             )
-            labels = _mock_rekognition_response(animal_type)
-        else:
-            # ==== MOCK END ====
-            model_arn = _get_model_arn(animal_type)
+            try:
+                claude_result = await _claude_classify_image(s3_image_key, animal_type)
+            except Exception as exc:
+                log.error("claude_vision_error", session_id=session_id, error=str(exc),
+                          timestamp=datetime.utcnow().isoformat() + "Z")
+                result = {"error": True, "code": "REKOGNITION_ERROR",
+                          "message": "Disease detection failed. Try again.",
+                          "message_hi": "रोग पहचान विफल रही। पुनः प्रयास करें।"}
+                return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
+            if not claude_result.get("disease"):
+                # soft failure
+                result = {"disease": None, "confidence": 0.0, "bbox": None,
+                          "soft_failure": True,
+                          "message": "Photo not clear enough. Please try again in better light.",
+                          "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
+                return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+            result = {**claude_result, "source": "claude"}
+
+        else:
+            # Branch 2: Rekognition + Claude double-check
+            model_arn = _get_model_arn(animal_type)
             response = _rekognition.detect_custom_labels(
                 ProjectVersionArn=model_arn,
                 Image={"S3Object": {"Bucket": config.s3_image_bucket, "Name": s3_image_key}},
                 MinConfidence=50,
             )
-
             labels = response.get("CustomLabels", [])
-            # ==== MOCK START: REMOVE BEFORE PRODUCTION (closing else) ====
-        # ==== MOCK END ====
-        duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
-        if not labels:
-            # Soft failure — 0 labels returned (blurry or unclear image)
-            result = {
-                "disease": None,
-                "confidence": 0.0,
-                "bbox": None,
-                "soft_failure": True,
-                "message": "Photo not clear enough. Please try again in better light.",
-                "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।",
-            }
-            log.info(
-                "tool_executed",
-                tool_name="classify_disease",
-                session_id=session_id,
-                animal_type=animal_type,
-                disease=None,
-                confidence=0.0,
-                soft_failure=True,
-                duration_ms=duration_ms,
-                timestamp=datetime.utcnow().isoformat() + "Z",
-            )
-            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            if not labels:
+                # soft failure (unchanged)
+                result = {"disease": None, "confidence": 0.0, "bbox": None,
+                          "soft_failure": True,
+                          "message": "Photo not clear enough. Please try again in better light.",
+                          "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
+                log.info("tool_executed", tool_name="classify_disease",
+                         session_id=session_id, animal_type=animal_type,
+                         disease=None, confidence=0.0, soft_failure=True,
+                         duration_ms=(datetime.utcnow() - start_time).total_seconds() * 1000,
+                         timestamp=datetime.utcnow().isoformat() + "Z")
+                return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-        # Extract top label by confidence
-        top_label = max(labels, key=lambda lbl: lbl.get("Confidence", 0))
-        disease_name = top_label.get("Name", "unknown")
-        confidence = round(top_label.get("Confidence", 0.0), 2)
+            top_label = max(labels, key=lambda lbl: lbl.get("Confidence", 0))
+            rek_disease = top_label.get("Name", "unknown")
+            rek_confidence = round(top_label.get("Confidence", 0.0), 2)
+            geometry = top_label.get("Geometry", {})
+            bb = geometry.get("BoundingBox", {})
+            rek_bbox = None
+            if bb:
+                rek_bbox = {
+                    "left":   max(0.0, min(1.0, bb.get("Left",   0.0))),
+                    "top":    max(0.0, min(1.0, bb.get("Top",    0.0))),
+                    "width":  max(0.0, min(1.0, bb.get("Width",  0.0))),
+                    "height": max(0.0, min(1.0, bb.get("Height", 0.0))),
+                }
 
-        # Extract bounding box (normalised 0-1 coordinates from Rekognition)
-        bbox = None
-        geometry = top_label.get("Geometry", {})
-        bb = geometry.get("BoundingBox", {})
-        if bb:
-            # Clamp all coordinates to [0, 1] — Rekognition can return values
-            # slightly outside range for objects near image edges.
-            bbox = {
-                "left": max(0.0, min(1.0, bb.get("Left", 0.0))),
-                "top": max(0.0, min(1.0, bb.get("Top", 0.0))),
-                "width": max(0.0, min(1.0, bb.get("Width", 0.0))),
-                "height": max(0.0, min(1.0, bb.get("Height", 0.0))),
-            }
-
-        result = {
-            "disease": disease_name,
-            "confidence": confidence,
-            "bbox": bbox,
-        }
-
-        log.info(
-            "tool_executed",
-            tool_name="classify_disease",
-            session_id=session_id,
-            animal_type=animal_type,
-            disease=disease_name,
-            confidence=confidence,
-            duration_ms=duration_ms,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-        )
-
-        # Dispatch diagnosis WS message to Flutter
-        from ws_map import _active_ws_map
-
-        async def _send(ws_ref, payload: dict) -> None:
+            # Claude double-check
             try:
-                await ws_ref.send_json(payload)
+                claude_result = await _claude_classify_image(s3_image_key, animal_type)
             except Exception as exc:
-                log.warning(
-                    "ws_send_failed",
-                    tool_name="classify_disease",
-                    session_id=session_id,
-                    error=str(exc),
-                    timestamp=datetime.utcnow().isoformat() + "Z",
-                )
+                log.warning("claude_vision_error_using_rekognition", session_id=session_id,
+                            error=str(exc), timestamp=datetime.utcnow().isoformat() + "Z")
+                claude_result = {}
 
-        ws = _active_ws_map.get(session_id)
-        if ws:
-            asyncio.create_task(
-                _send(
-                    ws,
-                    {
-                        "type": "diagnosis",
-                        "session_id": session_id,
-                        "disease": disease_name,
-                        "confidence": confidence,
-                        "bbox": bbox,
-                        "s3_key": s3_image_key,
-                    },
-                )
-            )
-
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            claude_disease = (claude_result.get("disease") or "").lower().strip()
+            if claude_disease and claude_disease != rek_disease.lower().strip():
+                # Disagreement: Claude wins
+                result = {**claude_result, "source": "claude"}
+                log.warning("classification_disagreement",
+                            session_id=session_id,
+                            rekognition_disease=rek_disease,
+                            claude_disease=claude_disease,
+                            timestamp=datetime.utcnow().isoformat() + "Z")
+            else:
+                # Agreement (or Claude had no opinion): Rekognition wins
+                result = {"disease": rek_disease, "confidence": rek_confidence,
+                          "bbox": rek_bbox, "source": "rekognition"}
 
     except ClientError as exc:
+        # Branch 3: Rekognition errored — fall through to Claude
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
         code = exc.response.get("Error", {}).get("Code", "Unknown")
-        log.error(
-            "rekognition_error",
+        log.warning(
+            "rekognition_error_claude_fallback",
             session_id=session_id,
             error_code=code,
             error=str(exc),
             duration_ms=duration_ms,
             timestamp=datetime.utcnow().isoformat() + "Z",
         )
-        if code == "InvalidParameterException":
-            result = {
-                "error": True,
-                "code": "REKOGNITION_MODEL_STOPPED",
-                "message": "Disease detection model is warming up. Please try again in 5 minutes.",
-                "message_hi": "रोग पहचान मॉडल तैयार हो रहा है। कृपया 5 मिनट में पुनः प्रयास करें।",
-            }
-        else:
-            result = {
-                "error": True,
-                "code": "REKOGNITION_ERROR",
-                "message": "Disease detection failed. Try again.",
-                "message_hi": "रोग पहचान विफल रही। पुनः प्रयास करें।",
-            }
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        try:
+            claude_result = await _claude_classify_image(s3_image_key, animal_type)
+        except Exception as claude_exc:
+            log.error("claude_vision_error", session_id=session_id,
+                      error=str(claude_exc), timestamp=datetime.utcnow().isoformat() + "Z")
+            result = {"error": True, "code": "REKOGNITION_ERROR",
+                      "message": "Disease detection failed. Try again.",
+                      "message_hi": "रोग पहचान विफल रही। पुनः प्रयास करें।"}
+            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+        if not claude_result.get("disease"):
+            result = {"disease": None, "confidence": 0.0, "bbox": None,
+                      "soft_failure": True,
+                      "message": "Photo not clear enough. Please try again in better light.",
+                      "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
+            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+        result = {**claude_result, "source": "claude_fallback"}
+
+    duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+    log.info(
+        "tool_executed",
+        tool_name="classify_disease",
+        session_id=session_id,
+        animal_type=animal_type,
+        disease=result.get("disease"),
+        confidence=result.get("confidence"),
+        source=result.get("source", "unknown"),
+        duration_ms=duration_ms,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+
+    # Dispatch diagnosis WS message to Flutter
+    from ws_map import _active_ws_map
+
+    async def _send(ws_ref, payload: dict) -> None:
+        try:
+            await ws_ref.send_json(payload)
+        except Exception as exc:
+            log.warning(
+                "ws_send_failed",
+                tool_name="classify_disease",
+                session_id=session_id,
+                error=str(exc),
+                timestamp=datetime.utcnow().isoformat() + "Z",
+            )
+
+    ws = _active_ws_map.get(session_id)
+    if ws:
+        asyncio.create_task(
+            _send(
+                ws,
+                {
+                    "type": "diagnosis",
+                    "session_id": session_id,
+                    "disease": result.get("disease"),
+                    "confidence": result.get("confidence"),
+                    "bbox": result.get("bbox"),
+                    "s3_key": s3_image_key,
+                },
+            )
+        )
+
+    return {"content": [{"type": "text", "text": json.dumps(result)}]}

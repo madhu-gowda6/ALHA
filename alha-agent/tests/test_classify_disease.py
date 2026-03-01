@@ -1,5 +1,6 @@
 """Tests for tools.classify_disease — full implementation tests."""
 import asyncio
+import io
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,18 @@ import pytest
 from botocore.exceptions import ClientError
 
 from tools.classify_disease import classify_disease
+
+
+def _make_bedrock_response(disease, confidence, bbox=None):
+    """Build a mock bedrock invoke_model response with the given classification."""
+    body = json.dumps({
+        "content": [{"text": json.dumps({
+            "disease": disease,
+            "confidence": confidence,
+            "bbox": bbox,
+        })}]
+    }).encode()
+    return {"body": io.BytesIO(body)}
 
 
 class TestClassifyDiseaseToolMeta:
@@ -70,12 +83,19 @@ class TestClassifyDiseaseLabelsFound:
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
         ):
             mock_ddb.get_item.return_value = {
                 "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
             }
             mock_rek.detect_custom_labels.return_value = mock_rekognition_response
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "lumpy_skin_disease", 85.0,
+                {"left": 0.12, "top": 0.35, "width": 0.45, "height": 0.28}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
@@ -90,12 +110,19 @@ class TestClassifyDiseaseLabelsFound:
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
         ):
             mock_ddb.get_item.return_value = {
                 "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
             }
             mock_rek.detect_custom_labels.return_value = mock_rekognition_response
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "lumpy_skin_disease", 85.0,
+                {"left": 0.12, "top": 0.35, "width": 0.45, "height": 0.28}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
@@ -115,6 +142,8 @@ class TestClassifyDiseaseLabelsFound:
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {"s1": mock_ws}, clear=True),
             patch("asyncio.create_task", side_effect=lambda coro: asyncio.ensure_future(coro)),
         ):
@@ -122,6 +151,11 @@ class TestClassifyDiseaseLabelsFound:
                 "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
             }
             mock_rek.detect_custom_labels.return_value = mock_rekognition_response
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "lumpy_skin_disease", 85.0,
+                {"left": 0.12, "top": 0.35, "width": 0.45, "height": 0.28}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
@@ -180,7 +214,7 @@ class TestClassifyDiseaseSoftFailure:
 
 
 class TestClassifyDiseaseClientError:
-    """Test ClientError handling — structured error dict, no raw exception."""
+    """Test ClientError handling — now falls through to Claude (claude_fallback)."""
 
     def _make_client_error(self, code: str) -> ClientError:
         return ClientError(
@@ -189,10 +223,12 @@ class TestClassifyDiseaseClientError:
         )
 
     @pytest.mark.asyncio
-    async def test_rekognition_error_returns_error_dict(self):
+    async def test_rekognition_error_falls_back_to_claude(self):
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
         ):
             mock_ddb.get_item.return_value = {
@@ -201,22 +237,28 @@ class TestClassifyDiseaseClientError:
             mock_rek.detect_custom_labels.side_effect = self._make_client_error(
                 "AccessDeniedException"
             )
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "lumpy_skin_disease", 80.0,
+                {"left": 0.1, "top": 0.2, "width": 0.3, "height": 0.4}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s3", "s3_image_key": "uploads/s3/img.jpg", "animal_type": "cattle"}
             )
 
         content = json.loads(result["content"][0]["text"])
-        assert content["error"] is True
-        assert content["code"] == "REKOGNITION_ERROR"
-        assert "message" in content
-        assert "message_hi" in content
+        assert content["source"] == "claude_fallback"
+        assert content["disease"] == "lumpy_skin_disease"
+        assert "error" not in content
 
     @pytest.mark.asyncio
-    async def test_model_stopped_returns_model_stopped_code(self):
+    async def test_model_stopped_also_falls_back_to_claude(self):
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
         ):
             mock_ddb.get_item.return_value = {
@@ -225,13 +267,20 @@ class TestClassifyDiseaseClientError:
             mock_rek.detect_custom_labels.side_effect = self._make_client_error(
                 "InvalidParameterException"
             )
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "foot_and_mouth", 75.0,
+                {"left": 0.2, "top": 0.1, "width": 0.4, "height": 0.3}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s3", "s3_image_key": "uploads/s3/img.jpg", "animal_type": "cattle"}
             )
 
         content = json.loads(result["content"][0]["text"])
-        assert content["code"] == "REKOGNITION_MODEL_STOPPED"
+        assert content["source"] == "claude_fallback"
+        assert content["disease"] is not None
+        assert "error" not in content
 
 
 class TestClassifyDiseaseDynamoFallback:
@@ -242,6 +291,8 @@ class TestClassifyDiseaseDynamoFallback:
         with (
             patch("tools.classify_disease._rekognition") as mock_rek,
             patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
             patch(
                 "tools.classify_disease.config.rekognition_cattle_arn",
@@ -261,6 +312,11 @@ class TestClassifyDiseaseDynamoFallback:
                     }
                 ]
             }
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "anthrax", 70.0,
+                {"left": 0.1, "top": 0.1, "width": 0.3, "height": 0.3}
+            )
 
             result = await classify_disease.handler(
                 {"session_id": "s4", "s3_image_key": "uploads/s4/img.jpg", "animal_type": "cattle"}
@@ -270,3 +326,206 @@ class TestClassifyDiseaseDynamoFallback:
         assert content["disease"] == "anthrax"
         # Verify fallback ARN was used (no error)
         assert "error" not in content
+
+
+class TestClaudeOnlyPath:
+    """REKOGNITION_MOCK=true — all classification goes to Claude."""
+
+    @pytest.fixture
+    def bedrock_response(self):
+        return _make_bedrock_response(
+            "lumpy_skin_disease", 83.0,
+            {"left": 0.1, "top": 0.2, "width": 0.3, "height": 0.4},
+        )
+
+    @pytest.mark.asyncio
+    async def test_claude_only_returns_disease(self, bedrock_response):
+        with (
+            patch("tools.classify_disease.config.rekognition_mock", True),
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = bedrock_response
+
+            result = await classify_disease.handler(
+                {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["disease"] == "lumpy_skin_disease"
+        assert content["source"] == "claude"
+
+    @pytest.mark.asyncio
+    async def test_claude_null_disease_returns_soft_failure(self):
+        with (
+            patch("tools.classify_disease.config.rekognition_mock", True),
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(None, 0.0, None)
+
+            result = await classify_disease.handler(
+                {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["soft_failure"] is True
+        assert content["disease"] is None
+
+
+class TestRekognitionClaudeAgree:
+    """Rekognition and Claude agree on disease — Rekognition result used."""
+
+    @pytest.mark.asyncio
+    async def test_agreement_uses_rekognition_result(self):
+        rek_bbox = {"Left": 0.1, "Top": 0.2, "Width": 0.5, "Height": 0.4}
+        with (
+            patch("tools.classify_disease._rekognition") as mock_rek,
+            patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.get_item.return_value = {
+                "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
+            }
+            mock_rek.detect_custom_labels.return_value = {
+                "CustomLabels": [{
+                    "Name": "lumpy_skin_disease",
+                    "Confidence": 91.0,
+                    "Geometry": {"BoundingBox": rek_bbox},
+                }]
+            }
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            # Claude agrees (same disease name)
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "lumpy_skin_disease", 78.0,
+                {"left": 0.2, "top": 0.3, "width": 0.4, "height": 0.3}
+            )
+
+            result = await classify_disease.handler(
+                {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["source"] == "rekognition"
+        # Rekognition confidence and bbox used
+        assert content["confidence"] == 91.0
+        assert content["bbox"]["left"] == pytest.approx(0.1)
+        assert content["bbox"]["top"] == pytest.approx(0.2)
+
+
+class TestRekognitionClaudeDisagree:
+    """Rekognition and Claude disagree — Claude wins."""
+
+    @pytest.mark.asyncio
+    async def test_disagreement_claude_wins(self):
+        with (
+            patch("tools.classify_disease._rekognition") as mock_rek,
+            patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.get_item.return_value = {
+                "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
+            }
+            mock_rek.detect_custom_labels.return_value = {
+                "CustomLabels": [{
+                    "Name": "lumpy_skin_disease",
+                    "Confidence": 88.0,
+                    "Geometry": {"BoundingBox": {"Left": 0.1, "Top": 0.1, "Width": 0.5, "Height": 0.4}},
+                }]
+            }
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            # Claude disagrees
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "dermatitis", 82.0,
+                {"left": 0.15, "top": 0.2, "width": 0.4, "height": 0.35}
+            )
+
+            result = await classify_disease.handler(
+                {"session_id": "s1", "s3_image_key": "uploads/s1/img.jpg", "animal_type": "cattle"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["disease"] == "dermatitis"
+        assert content["source"] == "claude"
+
+
+class TestRekognitionErrorFallback:
+    """Rekognition throws ClientError — falls back to Claude with source=claude_fallback."""
+
+    def _make_client_error(self, code: str = "AccessDeniedException") -> ClientError:
+        return ClientError(
+            error_response={"Error": {"Code": code, "Message": "Test error"}},
+            operation_name="detect_custom_labels",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rekognition_error_returns_claude_fallback(self):
+        with (
+            patch("tools.classify_disease._rekognition") as mock_rek,
+            patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.get_item.return_value = {
+                "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
+            }
+            mock_rek.detect_custom_labels.side_effect = self._make_client_error()
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.return_value = _make_bedrock_response(
+                "newcastle_disease", 77.0,
+                {"left": 0.1, "top": 0.1, "width": 0.3, "height": 0.3}
+            )
+
+            result = await classify_disease.handler(
+                {"session_id": "s5", "s3_image_key": "uploads/s5/img.jpg", "animal_type": "poultry"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["source"] == "claude_fallback"
+        assert content["disease"] == "newcastle_disease"
+        assert "error" not in content
+
+
+class TestClaudeVisionError:
+    """Both Rekognition and Claude fail — last-resort error dict returned."""
+
+    def _make_client_error(self) -> ClientError:
+        return ClientError(
+            error_response={"Error": {"Code": "AccessDeniedException", "Message": "Denied"}},
+            operation_name="detect_custom_labels",
+        )
+
+    @pytest.mark.asyncio
+    async def test_both_fail_returns_error_dict(self):
+        with (
+            patch("tools.classify_disease._rekognition") as mock_rek,
+            patch("tools.classify_disease._dynamodb") as mock_ddb,
+            patch("tools.classify_disease._s3") as mock_s3,
+            patch("tools.classify_disease._bedrock_runtime") as mock_br,
+            patch.dict("ws_map._active_ws_map", {}, clear=True),
+        ):
+            mock_ddb.get_item.return_value = {
+                "Item": {"model_arn": {"S": "arn:aws:rekognition:us-east-1:123:project/test/version/1"}}
+            }
+            mock_rek.detect_custom_labels.side_effect = self._make_client_error()
+            mock_s3.get_object.return_value = {"Body": io.BytesIO(b"fake_image_bytes")}
+            mock_br.invoke_model.side_effect = Exception("Bedrock unavailable")
+
+            result = await classify_disease.handler(
+                {"session_id": "s6", "s3_image_key": "uploads/s6/img.jpg", "animal_type": "cattle"}
+            )
+
+        content = json.loads(result["content"][0]["text"])
+        assert content["error"] is True
+        assert content["code"] == "REKOGNITION_ERROR"
+        assert "message" in content
+        assert "message_hi" in content

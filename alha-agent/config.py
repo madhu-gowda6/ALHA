@@ -21,6 +21,9 @@ class Config:
         self.bedrock_model_id: str = os.environ.get(
             "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
         )
+        self.bedrock_vision_model_id: str = os.environ.get(
+            "BEDROCK_VISION_MODEL_ID", self.bedrock_model_id
+        )
         self.anthropic_custom_headers: str = os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "")
         self.cognito_client_id: str = os.environ.get("COGNITO_CLIENT_ID", "")
         self.cognito_user_pool_id: str = os.environ.get("COGNITO_USER_POOL_ID", "")
