@@ -240,6 +240,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _toggleVoice() async {
     if (_isListening) {
       await _speechService.stopListening();
+      _inputBarKey.currentState?.cancelVoiceCapture();
       setState(() => _isListening = false);
     } else {
       final ok = await _speechService.initialize();
@@ -257,13 +258,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       setState(() => _isListening = true);
       final lang = ref.read(sessionProvider).language;
+      _inputBarKey.currentState?.startVoiceCapture();
       await _speechService.startListening(
         (transcript) {
           setState(() => _isListening = false);
-          _inputBarKey.currentState?.setVoiceText(transcript);
+          _inputBarKey.currentState?.commitVoiceText(transcript);
         },
-        localeId: lang == 'en' ? 'en_US' : 'hi_IN',
+        localeId: lang == 'en' ? 'en-US' : 'hi-IN',
+        onPartialResult: (transcript) {
+          if (!mounted) return;
+          _inputBarKey.currentState?.updateVoiceText(transcript);
+        },
         onError: (error) {
+          _inputBarKey.currentState?.cancelVoiceCapture();
           setState(() => _isListening = false);
           if (!mounted) return;
           final isPermission = error.contains('not_allowed') ||

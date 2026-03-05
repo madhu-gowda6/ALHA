@@ -26,6 +26,10 @@ class InputBarState extends State<InputBar> {
   final _controller = TextEditingController();
   bool _hasText = false;
 
+  @visibleForTesting
+  TextEditingController get controller => _controller;
+  String _voiceBase = '';
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +59,30 @@ class InputBarState extends State<InputBar> {
     _controller.selection = TextSelection.fromPosition(
       TextPosition(offset: newText.length),
     );
+  }
+
+  /// Captures the current text as the pre-voice base before recognition starts.
+  void startVoiceCapture() {
+    _voiceBase = _controller.text.trimRight();
+  }
+
+  /// Replaces the voice segment with [transcript], preserving the pre-voice base.
+  void updateVoiceText(String transcript) {
+    if (transcript.isEmpty) return;
+    final newText = _voiceBase.isEmpty ? transcript : '$_voiceBase $transcript';
+    _controller.text = newText;
+    _controller.selection = TextSelection.collapsed(offset: newText.length);
+  }
+
+  /// Finalises the voice segment and clears the base for the next session.
+  void commitVoiceText(String transcript) {
+    updateVoiceText(transcript);
+    _voiceBase = '';
+  }
+
+  /// Clears the voice base on manual stop without touching controller text.
+  void cancelVoiceCapture() {
+    _voiceBase = '';
   }
 
   @override

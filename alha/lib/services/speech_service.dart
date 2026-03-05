@@ -21,8 +21,9 @@ class SpeechService {
 
   Future<void> startListening(
     void Function(String transcript) onResult, {
-    String localeId = 'hi_IN',
+    String localeId = 'hi-IN',
     void Function(String error)? onError,
+    void Function(String transcript)? onPartialResult,
   }) async {
     _onError = onError;
     if (!_initialized) await initialize();
@@ -32,12 +33,14 @@ class SpeechService {
       onResult: (result) {
         if (result.finalResult) {
           onResult(result.recognizedWords);
+        } else {
+          onPartialResult?.call(result.recognizedWords);
         }
       },
       localeId: localeId,
       listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 5),
-      listenOptions: SpeechListenOptions(partialResults: false),
+      pauseFor: const Duration(seconds: 8),
+      listenOptions: SpeechListenOptions(partialResults: true),
     );
   }
 
