@@ -166,14 +166,13 @@ async def classify_disease(args: dict) -> dict:
                 return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
             if not claude_result.get("disease"):
-                # soft failure
+                # soft failure — fall through to WS dispatch so Flutter gets diagnosis message
                 result = {"disease": None, "confidence": 0.0, "bbox": None,
                           "soft_failure": True,
                           "message": "Photo not clear enough. Please try again in better light.",
                           "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
-                return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-            result = {**claude_result, "source": "claude"}
+            else:
+                result = {**claude_result, "source": "claude"}
 
         else:
             # Branch 2: Rekognition + Claude double-check
@@ -186,53 +185,47 @@ async def classify_disease(args: dict) -> dict:
             labels = response.get("CustomLabels", [])
 
             if not labels:
-                # soft failure (unchanged)
+                # soft failure — fall through to WS dispatch so Flutter gets diagnosis message
                 result = {"disease": None, "confidence": 0.0, "bbox": None,
                           "soft_failure": True,
                           "message": "Photo not clear enough. Please try again in better light.",
                           "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
-                log.info("tool_executed", tool_name="classify_disease",
-                         session_id=session_id, animal_type=animal_type,
-                         disease=None, confidence=0.0, soft_failure=True,
-                         duration_ms=(datetime.utcnow() - start_time).total_seconds() * 1000,
-                         timestamp=datetime.utcnow().isoformat() + "Z")
-                return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-            top_label = max(labels, key=lambda lbl: lbl.get("Confidence", 0))
-            rek_disease = top_label.get("Name", "unknown")
-            rek_confidence = round(top_label.get("Confidence", 0.0), 2)
-            geometry = top_label.get("Geometry", {})
-            bb = geometry.get("BoundingBox", {})
-            rek_bbox = None
-            if bb:
-                rek_bbox = {
-                    "left":   max(0.0, min(1.0, bb.get("Left",   0.0))),
-                    "top":    max(0.0, min(1.0, bb.get("Top",    0.0))),
-                    "width":  max(0.0, min(1.0, bb.get("Width",  0.0))),
-                    "height": max(0.0, min(1.0, bb.get("Height", 0.0))),
-                }
-
-            # Claude double-check
-            try:
-                claude_result = await _claude_classify_image(s3_image_key, animal_type)
-            except Exception as exc:
-                log.warning("claude_vision_error_using_rekognition", session_id=session_id,
-                            error=str(exc), timestamp=datetime.utcnow().isoformat() + "Z")
-                claude_result = {}
-
-            claude_disease = (claude_result.get("disease") or "").lower().strip()
-            if claude_disease and claude_disease != rek_disease.lower().strip():
-                # Disagreement: Claude wins
-                result = {**claude_result, "source": "claude"}
-                log.warning("classification_disagreement",
-                            session_id=session_id,
-                            rekognition_disease=rek_disease,
-                            claude_disease=claude_disease,
-                            timestamp=datetime.utcnow().isoformat() + "Z")
             else:
-                # Agreement (or Claude had no opinion): Rekognition wins
-                result = {"disease": rek_disease, "confidence": rek_confidence,
-                          "bbox": rek_bbox, "source": "rekognition"}
+                top_label = max(labels, key=lambda lbl: lbl.get("Confidence", 0))
+                rek_disease = top_label.get("Name", "unknown")
+                rek_confidence = round(top_label.get("Confidence", 0.0), 2)
+                geometry = top_label.get("Geometry", {})
+                bb = geometry.get("BoundingBox", {})
+                rek_bbox = None
+                if bb:
+                    rek_bbox = {
+                        "left":   max(0.0, min(1.0, bb.get("Left",   0.0))),
+                        "top":    max(0.0, min(1.0, bb.get("Top",    0.0))),
+                        "width":  max(0.0, min(1.0, bb.get("Width",  0.0))),
+                        "height": max(0.0, min(1.0, bb.get("Height", 0.0))),
+                    }
+
+                # Claude double-check
+                try:
+                    claude_result = await _claude_classify_image(s3_image_key, animal_type)
+                except Exception as exc:
+                    log.warning("claude_vision_error_using_rekognition", session_id=session_id,
+                                error=str(exc), timestamp=datetime.utcnow().isoformat() + "Z")
+                    claude_result = {}
+
+                claude_disease = (claude_result.get("disease") or "").lower().strip()
+                if claude_disease and claude_disease != rek_disease.lower().strip():
+                    # Disagreement: Claude wins
+                    result = {**claude_result, "source": "claude"}
+                    log.warning("classification_disagreement",
+                                session_id=session_id,
+                                rekognition_disease=rek_disease,
+                                claude_disease=claude_disease,
+                                timestamp=datetime.utcnow().isoformat() + "Z")
+                else:
+                    # Agreement (or Claude had no opinion): Rekognition wins
+                    result = {"disease": rek_disease, "confidence": rek_confidence,
+                              "bbox": rek_bbox, "source": "rekognition"}
 
     except ClientError as exc:
         # Branch 3: Rekognition errored — fall through to Claude
@@ -257,27 +250,28 @@ async def classify_disease(args: dict) -> dict:
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
         if not claude_result.get("disease"):
+            # soft failure — fall through to WS dispatch so Flutter gets diagnosis message
             result = {"disease": None, "confidence": 0.0, "bbox": None,
                       "soft_failure": True,
                       "message": "Photo not clear enough. Please try again in better light.",
                       "message_hi": "फोटो स्पष्ट नहीं थी। कृपया बेहतर रोशनी में पुनः प्रयास करें।"}
-            return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-        result = {**claude_result, "source": "claude_fallback"}
+        else:
+            result = {**claude_result, "source": "claude_fallback"}
 
     duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
-    log.info(
-        "tool_executed",
-        tool_name="classify_disease",
-        session_id=session_id,
-        animal_type=animal_type,
-        disease=result.get("disease"),
-        confidence=result.get("confidence"),
-        source=result.get("source", "unknown"),
-        duration_ms=duration_ms,
-        timestamp=datetime.utcnow().isoformat() + "Z",
-    )
+    if not result.get("soft_failure"):
+        log.info(
+            "tool_executed",
+            tool_name="classify_disease",
+            session_id=session_id,
+            animal_type=animal_type,
+            disease=result.get("disease"),
+            confidence=result.get("confidence"),
+            source=result.get("source", "unknown"),
+            duration_ms=duration_ms,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
 
     # Dispatch diagnosis WS message to Flutter
     from ws_map import _active_ws_map
@@ -296,18 +290,17 @@ async def classify_disease(args: dict) -> dict:
 
     ws = _active_ws_map.get(session_id)
     if ws:
-        asyncio.create_task(
-            _send(
-                ws,
-                {
-                    "type": "diagnosis",
-                    "session_id": session_id,
-                    "disease": result.get("disease"),
-                    "confidence": result.get("confidence"),
-                    "bbox": result.get("bbox"),
-                    "s3_key": s3_image_key,
-                },
-            )
-        )
+        ws_payload = {
+            "type": "diagnosis",
+            "session_id": session_id,
+            "soft_failure": result.get("soft_failure", False),
+            "disease": result.get("disease"),
+            "confidence": result.get("confidence"),
+            "bbox": result.get("bbox"),
+            "s3_key": s3_image_key,
+            "message": result.get("message"),
+            "message_hi": result.get("message_hi"),
+        }
+        asyncio.create_task(_send(ws, ws_payload))
 
     return {"content": [{"type": "text", "text": json.dumps(result)}]}

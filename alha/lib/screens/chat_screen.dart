@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../config/app_config.dart';
 import '../models/message.dart';
 import '../providers/camera_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
+import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import '../services/speech_service.dart';
 import '../services/websocket_service.dart';
@@ -19,6 +21,7 @@ import '../widgets/severity_badge.dart';
 import '../widgets/symptom_interview_overlay.dart';
 import '../widgets/text_bubble.dart';
 import 'history_screen.dart';
+import 'profile_screen.dart';
 import '../widgets/typing_indicator.dart';
 import '../widgets/vet_card.dart';
 
@@ -100,6 +103,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
 
     _wsService.connect(AppConfig.wsUrl, token);
+  }
+
+  Future<void> _startNewSession() async {
+    // Cancel WS-level subscriptions
+    await _wsSub?.cancel();
+    await _wsStateSub?.cancel();
+    _wsService.disconnect();
+
+    // Cancel chatProvider subs so _connect() re-subscribes without duplicates (F1)
+    await _symptomSub?.cancel();
+    await _cameraSub?.cancel();
+    await _gpsSub?.cancel();
+    await _vetPrefSub?.cancel();
+
+    // Reset local overlay state (F3)
+    if (mounted) setState(() {
+      _showGpsRequest = false;
+      _showVetPreference = false;
+    });
+
+    // New session ID
+    final newId = const Uuid().v4();
+    await AuthService().setSessionId(newId);
+
+    if (!mounted) return; // guard after async (F2)
+
+    // Reset providers
+    ref.read(sessionProvider.notifier).setSessionId(newId);
+    ref.read(chatProvider.notifier).clearMessages();
+
+    // Reconnect — re-subscribes all streams fresh
+    _connect();
   }
 
   void _showSymptomOverlay(SymptomInterviewEvent event) {
@@ -307,6 +342,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return TextBubble(message: msg);
   }
 
+  Widget _buildNewSessionBanner() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Consultation complete. Start a new one?\n'
+            'परामर्श पूरा हुआ। नया शुरू करें?',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.green.shade900,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.add_comment_outlined),
+              label: const Text('New Consultation / नई परामर्श'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green[700],
+                foregroundColor: Colors.white,
+                minimumSize: const Size(0, 48),
+              ),
+              onPressed: _startNewSession,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGpsRequestCard() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -421,7 +496,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final session = ref.watch(sessionProvider);
     final chat = ref.watch(chatProvider);
     final connState = session.connectionState;
-    final inputDisabled = chat.isStreaming || chat.sessionComplete;
+    final inputDisabled = chat.isStreaming;
 
     return Scaffold(
       appBar: AppBar(
@@ -433,6 +508,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ProfileScreen()),
+            ),
+            tooltip: 'Profile',
+          ),
+          IconButton(
+            icon: const Icon(Icons.add_comment_outlined),
+            onPressed: _startNewSession,
+            tooltip: 'New Consultation',
+          ),
           IconButton(
             icon: const Icon(Icons.history),
             onPressed: () {
@@ -462,6 +550,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   _buildMessageItem(i, chat, session.language),
             ),
           ),
+          if (chat.sessionComplete) _buildNewSessionBanner(),
           if (_showGpsRequest) _buildGpsRequestCard(),
           if (_showVetPreference)
             _buildVetPreferenceCard(session.sessionId ?? ''),

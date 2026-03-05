@@ -46,6 +46,14 @@ void main() {
       );
     });
 
+    test('setSessionId updates sessionId without touching authToken', () {
+      notifier.setAuth('my-token', 'old-sess');
+      notifier.setSessionId('new-sess-uuid');
+      final state = container.read(sessionProvider);
+      expect(state.sessionId, 'new-sess-uuid');
+      expect(state.authToken, 'my-token'); // unchanged
+    });
+
     test('clearAuth resets to initial state', () {
       notifier.setAuth('tok', 'sid');
       notifier.clearAuth();

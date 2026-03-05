@@ -136,5 +136,46 @@ void main() {
       await service.setSessionId('my-session-id');
       expect(await service.getSessionId(), 'my-session-id');
     });
+
+    group('getTokenClaims', () {
+      String _fakeJwt(Map<String, dynamic> payload) {
+        final header = base64Url.encode(utf8.encode('{"alg":"RS256"}')).replaceAll('=', '');
+        final body = base64Url.encode(utf8.encode(jsonEncode(payload))).replaceAll('=', '');
+        return '$header.$body.fakesig';
+      }
+
+      test('returns correct claims for a valid JWT', () async {
+        final futureExp = (DateTime.now().millisecondsSinceEpoch ~/ 1000) + 3600;
+        final jwt = _fakeJwt({'sub': '9876543210', 'username': 'raju', 'exp': futureExp});
+        SharedPreferences.setMockInitialValues({'auth_token': jwt});
+        final service = AuthService();
+        final claims = await service.getTokenClaims();
+        expect(claims, isNotNull);
+        expect(claims!['sub'], '9876543210');
+        expect(claims['username'], 'raju');
+        expect(claims['exp'], futureExp);
+      });
+
+      test('returns claims even when token is expired (expiry is isLoggedIn responsibility)', () async {
+        final pastExp = (DateTime.now().millisecondsSinceEpoch ~/ 1000) - 3600;
+        final jwt = _fakeJwt({'sub': '1111111111', 'exp': pastExp});
+        SharedPreferences.setMockInitialValues({'auth_token': jwt});
+        final service = AuthService();
+        final claims = await service.getTokenClaims();
+        expect(claims, isNotNull);
+        expect(claims!['sub'], '1111111111');
+      });
+
+      test('returns null when no token stored', () async {
+        final service = AuthService();
+        expect(await service.getTokenClaims(), isNull);
+      });
+
+      test('returns null for malformed token (not 3 parts)', () async {
+        SharedPreferences.setMockInitialValues({'auth_token': 'not.a.valid.jwt.parts'});
+        final service = AuthService();
+        expect(await service.getTokenClaims(), isNull);
+      });
+    });
   });
 }

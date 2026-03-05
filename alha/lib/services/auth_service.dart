@@ -44,23 +44,28 @@ class AuthService {
     return prefs.getString(_tokenKey);
   }
 
-  Future<bool> isLoggedIn() async {
+  Future<Map<String, dynamic>?> getTokenClaims() async {
     final token = await getToken();
-    if (token == null || token.isEmpty) return false;
-    // Validate JWT has not expired before auto-login
+    if (token == null || token.isEmpty) return null;
     try {
       final parts = token.split('.');
-      if (parts.length != 3) return false;
+      if (parts.length != 3) return null;
       final payload = base64Url.normalize(parts[1]);
       final decoded = utf8.decode(base64Url.decode(payload));
-      final claims = jsonDecode(decoded) as Map<String, dynamic>;
-      final exp = claims['exp'] as int?;
-      if (exp == null) return false;
-      final expiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
-      return DateTime.now().isBefore(expiry);
+      return jsonDecode(decoded) as Map<String, dynamic>;
     } catch (_) {
-      return false;
+      return null;
     }
+  }
+
+  Future<bool> isLoggedIn() async {
+    final claims = await getTokenClaims();
+    if (claims == null) return false;
+    final exp = claims['exp'] as int?;
+    if (exp == null) return false;
+    return DateTime.now().isBefore(
+      DateTime.fromMillisecondsSinceEpoch(exp * 1000),
+    );
   }
 
   Future<void> logout() async {

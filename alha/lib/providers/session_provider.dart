@@ -44,6 +44,10 @@ class SessionNotifier extends StateNotifier<SessionState> {
     state = state.copyWith(connectionState: wsState);
   }
 
+  void setSessionId(String sessionId) {
+    state = state.copyWith(sessionId: sessionId);
+  }
+
   /// Auto-detect language from message content.
   /// If message contains Devanagari characters → "hi", else "en".
   String detectLanguage(String message) {
