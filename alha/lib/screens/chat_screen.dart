@@ -66,6 +66,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ref.read(sessionProvider.notifier).setConnectionState(state);
       if (state == WsConnectionState.reconnecting) {
         _showReconnectSnackBar();
+      } else if (state == WsConnectionState.connected) {
+        if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
       }
     });
 
@@ -207,10 +209,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _showReconnectSnackBar() {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Reconnecting... / पुनः जोड़ा जा रहा है...'),
-        duration: Duration(seconds: 3),
+        duration: Duration(minutes: 1),
       ),
     );
   }
