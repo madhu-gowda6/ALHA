@@ -57,6 +57,57 @@
     });
   </script>
 
+  <script>
+    // ALHA: PCM audio capture via Web Audio API → Amazon Transcribe (server-side)
+    // Captures 16 kHz mono Int16 PCM and delivers base64-encoded chunks to a
+    // Dart callback, which forwards them over the existing WebSocket.
+
+    window.alhaStartAudioCapture = async function(sampleRate, chunkCallback) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sampleRate });
+        const source = ctx.createMediaStreamSource(stream);
+        // ScriptProcessorNode is deprecated but universally supported.
+        // bufferSize 4096 → ~256 ms at 16 kHz — a comfortable chunk size for Transcribe.
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+        processor.onaudioprocess = function(e) {
+          var f32 = e.inputBuffer.getChannelData(0);
+          var i16 = new Int16Array(f32.length);
+          for (var i = 0; i < f32.length; i++) {
+            var s = Math.max(-1.0, Math.min(1.0, f32[i]));
+            i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+          // Encode raw bytes as base64
+          var bytes = new Uint8Array(i16.buffer);
+          var bin = '';
+          for (var j = 0; j < bytes.length; j++) { bin += String.fromCharCode(bytes[j]); }
+          chunkCallback(btoa(bin));
+        };
+
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        window._alhaCapture = { ctx: ctx, processor: processor, source: source, stream: stream };
+        return true;
+      } catch (err) {
+        console.error('[ALHA] Audio capture failed:', err);
+        return false;
+      }
+    };
+
+    window.alhaStopAudioCapture = function() {
+      var c = window._alhaCapture;
+      if (!c) return;
+      try {
+        c.source.disconnect(c.processor);
+        c.processor.disconnect(c.ctx.destination);
+        c.ctx.close();
+        c.stream.getTracks().forEach(function(t) { t.stop(); });
+      } catch(e) {}
+      window._alhaCapture = null;
+    };
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

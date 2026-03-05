@@ -11,7 +11,7 @@ import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
-import '../services/speech_service.dart';
+import '../services/transcribe_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/camera_overlay.dart';
 import '../widgets/image_bubble.dart';
@@ -34,7 +34,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _wsService = WebSocketService();
-  final _speechService = SpeechService();
+  final _transcribeService = TranscribeService();
   final _locationService = LocationService();
   final _scrollController = ScrollController();
   final _inputBarKey = GlobalKey<InputBarState>();
@@ -72,6 +72,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
 
     _wsSub = _wsService.messages.listen((json) {
+      // transcript messages are handled by TranscribeService directly
+      if ((json['type'] as String?) == 'transcript') return;
       ref.read(chatProvider.notifier).handleWsMessage(json);
       _scrollToBottom();
     });
@@ -238,55 +240,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _toggleVoice() async {
+    final session = ref.read(sessionProvider);
     if (_isListening) {
-      await _speechService.stopListening();
+      await _transcribeService.stopCapture(
+        wsService: _wsService,
+        sessionId: session.sessionId ?? '',
+      );
       _inputBarKey.currentState?.cancelVoiceCapture();
       setState(() => _isListening = false);
     } else {
-      final ok = await _speechService.initialize();
-      if (!ok) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Microphone access denied / माइक्रोफ़ोन की अनुमति नहीं मिली',
-              ),
-            ),
-          );
-        }
-        return;
-      }
       setState(() => _isListening = true);
-      final lang = ref.read(sessionProvider).language;
       _inputBarKey.currentState?.startVoiceCapture();
-      await _speechService.startListening(
-        (transcript) {
-          setState(() => _isListening = false);
-          _inputBarKey.currentState?.commitVoiceText(transcript);
-        },
-        localeId: lang == 'en' ? 'en-US' : 'hi-IN',
-        onPartialResult: (transcript) {
+      final ok = await _transcribeService.startCapture(
+        wsService: _wsService,
+        sessionId: session.sessionId ?? '',
+        language: session.language == 'en' ? 'en-US' : 'hi-IN',
+        onTranscript: (text, isFinal) {
           if (!mounted) return;
-          _inputBarKey.currentState?.updateVoiceText(transcript);
-        },
-        onError: (error) {
-          _inputBarKey.currentState?.cancelVoiceCapture();
-          setState(() => _isListening = false);
-          if (!mounted) return;
-          final isPermission = error.contains('not_allowed') ||
-              error.contains('permission') ||
-              error.contains('denied');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                isPermission
-                    ? 'Microphone access denied / माइक्रोफ़ोन की अनुमति नहीं मिली'
-                    : 'Voice error: $error / आवाज़ त्रुटि हुई',
-              ),
-            ),
-          );
+          if (isFinal) {
+            _inputBarKey.currentState?.commitVoiceText(text);
+            // Re-capture the committed text as the base for the next segment.
+            _inputBarKey.currentState?.startVoiceCapture();
+          } else {
+            _inputBarKey.currentState?.updateVoiceText(text);
+          }
         },
       );
+      if (!ok) {
+        _inputBarKey.currentState?.cancelVoiceCapture();
+        setState(() => _isListening = false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Microphone access denied / माइक्रोफ़ोन की अनुमति नहीं मिली',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -311,6 +302,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _cameraSub?.cancel();
     _gpsSub?.cancel();
     _vetPrefSub?.cancel();
+    _transcribeService.dispose();
     _wsService.dispose();
     _scrollController.dispose();
     super.dispose();

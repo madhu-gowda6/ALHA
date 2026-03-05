@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from agent import process_message
 from config import config
 from hooks.logging_hook import LoggingHook
+import transcribe_service
 
 log = structlog.get_logger()
 _hook = LoggingHook()
@@ -293,6 +294,17 @@ async def websocket_endpoint(ws: WebSocket):
         timestamp=datetime.utcnow().isoformat() + "Z",
     )
 
+    # Per-connection send lock — prevents concurrent ws.send_json calls from
+    # the main loop and background Transcribe tasks colliding.
+    send_lock = asyncio.Lock()
+
+    async def locked_send(payload: dict) -> None:
+        async with send_lock:
+            await ws.send_json(payload)
+
+    # Active Transcribe tasks for this connection, keyed by session_id.
+    active_transcriptions: dict[str, asyncio.Task] = {}
+
     try:
         while True:
             raw = await ws.receive_text()
@@ -305,7 +317,7 @@ async def websocket_endpoint(ws: WebSocket):
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                await ws.send_json(
+                await locked_send(
                     {
                         "type": "error",
                         "session_id": "",
@@ -325,7 +337,7 @@ async def websocket_endpoint(ws: WebSocket):
                 if not message:
                     continue
                 if len(message) > 2000:
-                    await ws.send_json(
+                    await locked_send(
                         {
                             "type": "error",
                             "session_id": session_id,
@@ -522,6 +534,42 @@ async def websocket_endpoint(ws: WebSocket):
                         if len(history) > _MAX_HISTORY:
                             _session_histories[session_id] = history[-_MAX_HISTORY:]
 
+            elif msg_type == "voice_start":
+                language_code = data.get("language", "hi-IN")
+                # Cancel any existing transcription for this session
+                existing = active_transcriptions.pop(session_id, None)
+                if existing and not existing.done():
+                    existing.cancel()
+                transcribe_service.start_session(session_id)
+                task = asyncio.create_task(
+                    transcribe_service.run_transcription(
+                        session_id=session_id,
+                        language_code=language_code,
+                        region=config.aws_region,
+                        send_fn=locked_send,
+                    )
+                )
+                active_transcriptions[session_id] = task
+                log.info(
+                    "voice_start",
+                    session_id=session_id,
+                    language_code=language_code,
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
+            elif msg_type == "voice_audio":
+                b64 = data.get("data", "")
+                if b64:
+                    transcribe_service.push_audio(session_id, b64)
+
+            elif msg_type == "voice_stop":
+                transcribe_service.stop_session(session_id)
+                log.info(
+                    "voice_stop",
+                    session_id=session_id,
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
+
             else:
                 log.warning(
                     "ws_unknown_message_type",
@@ -531,6 +579,11 @@ async def websocket_endpoint(ws: WebSocket):
                 )
 
     except WebSocketDisconnect:
+        # Cancel all in-progress transcription tasks for this connection
+        for task in active_transcriptions.values():
+            if not task.done():
+                task.cancel()
+        active_transcriptions.clear()
         log.info(
             "ws_disconnected",
             timestamp=datetime.utcnow().isoformat() + "Z",

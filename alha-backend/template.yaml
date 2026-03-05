@@ -313,6 +313,10 @@ Resources:
                 Action:
                   - sns:Publish
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - transcribe:StartStreamTranscription
+                Resource: '*'
 
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
