@@ -157,7 +157,7 @@ Tools are registered as an in-process MCP server (not a separate process) to avo
 The `query()` streaming API with `stream_input()` (async iterable prompt) keeps stdin open for bidirectional MCP I/O. The subprocess environment inherits ECS IAM credential env vars (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) for seamless Bedrock access without explicit API keys.
 
 ### 5. Dual Disease Classification
-Rekognition Custom Labels provides fast, specialized detection. Claude vision acts as a double-check. On disagreement, Claude wins (more generalizable). On Rekognition error, Claude is the sole fallback. `REKOGNITION_MOCK=true` bypasses Rekognition entirely for development without Rekognition model ARNs.
+Rekognition Custom Labels provides fast, specialized detection. Claude vision acts as a double-check. On disagreement, Claude wins (more generalizable). On Rekognition error, Claude is the sole fallback. `REKOGNITION_CLAUDE=true` bypasses Rekognition entirely for development without Rekognition model ARNs.
 
 ### 6. Language Handling
 Language is detected per-message from Devanagari Unicode range (`\u0900–\u097F`) in Flutter and tagged via `[language: hi/en]` in every prompt. The system prompt mandates strict language consistency — no mixing within a session.

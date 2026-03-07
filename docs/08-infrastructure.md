@@ -130,7 +130,7 @@ Internet → API Gateway (HTTP API) → Lambda Functions
 | `S3_IMAGE_BUCKET` | **Yes** | — | S3 bucket for images |
 | `REKOGNITION_CATTLE_ARN` | No | `""` | Rekognition model ARN fallback |
 | `REKOGNITION_POULTRY_ARN` | No | `""` | Rekognition model ARN fallback |
-| `REKOGNITION_MOCK` | No | `false` | `true` to skip Rekognition, use Claude vision |
+| `REKOGNITION_CLAUDE` | No | `false` | `true` to skip Rekognition, use Claude vision |
 | `BEDROCK_KB_ID` | No | `""` | Bedrock Knowledge Base ID |
 | `CLAUDE_CODE_USE_BEDROCK` | No | `0` | `1` to use Bedrock instead of direct API |
 | `BEDROCK_MODEL_ID` | No | `us.anthropic.claude-sonnet-4-6` | Bedrock model ID |

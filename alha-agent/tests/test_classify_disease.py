@@ -329,7 +329,7 @@ class TestClassifyDiseaseDynamoFallback:
 
 
 class TestClaudeOnlyPath:
-    """REKOGNITION_MOCK=true — all classification goes to Claude."""
+    """REKOGNITION_CLAUDE=true — all classification goes to Claude."""
 
     @pytest.fixture
     def bedrock_response(self):
@@ -341,7 +341,7 @@ class TestClaudeOnlyPath:
     @pytest.mark.asyncio
     async def test_claude_only_returns_disease(self, bedrock_response):
         with (
-            patch("tools.classify_disease.config.rekognition_mock", True),
+            patch("tools.classify_disease.config.rekognition_claude", True),
             patch("tools.classify_disease._s3") as mock_s3,
             patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),
@@ -360,7 +360,7 @@ class TestClaudeOnlyPath:
     @pytest.mark.asyncio
     async def test_claude_null_disease_returns_soft_failure(self):
         with (
-            patch("tools.classify_disease.config.rekognition_mock", True),
+            patch("tools.classify_disease.config.rekognition_claude", True),
             patch("tools.classify_disease._s3") as mock_s3,
             patch("tools.classify_disease._bedrock_runtime") as mock_br,
             patch.dict("ws_map._active_ws_map", {}, clear=True),

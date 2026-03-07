@@ -185,7 +185,7 @@ S3_IMAGE_BUCKET=alha-images
 CONSULTATIONS_TABLE=alha-consultations
 VETS_TABLE=alha-vets
 BEDROCK_KB_ID=XXXXXXXXXX           # optional
-REKOGNITION_CATTLE_ARN=arn:aws:... # optional; set REKOGNITION_MOCK=true if not available
+REKOGNITION_CATTLE_ARN=arn:aws:... # optional; set REKOGNITION_CLAUDE=true if not available
 REKOGNITION_POULTRY_ARN=arn:aws:...
 ```
 
@@ -264,7 +264,7 @@ export CONSULTATIONS_TABLE=alha-consultations
 export VETS_TABLE=alha-vets
 export S3_IMAGE_BUCKET=alha-images
 export AWS_REGION=us-east-1
-export REKOGNITION_MOCK=true
+export REKOGNITION_CLAUDE=true
 export CLAUDE_CODE_USE_BEDROCK=1
 
 uvicorn app:app --host 0.0.0.0 --port 8000 --reload
@@ -478,7 +478,7 @@ LOW/NONE:
 
 - [ ] Remove `GET /debug/claude` endpoint
 - [ ] Configure SNS SMS production mode (exit sandbox)
-- [ ] Set `REKOGNITION_MOCK=false` with configured model ARNs
+- [ ] Set `REKOGNITION_CLAUDE=false` with configured model ARNs
 - [ ] Restrict `CORS_ORIGINS` to CloudFront domain
 - [ ] Replace `dynamodb:*` / `s3:*` IAM wildcards with specific ARNs
 - [ ] Set `ANTHROPIC_CUSTOM_HEADERS` with Bedrock Guardrail ID

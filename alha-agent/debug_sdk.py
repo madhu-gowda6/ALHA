@@ -31,8 +31,8 @@ os.environ.setdefault("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 os.environ.setdefault("CONSULTATIONS_TABLE", "alha-consultations")
 os.environ.setdefault("VETS_TABLE", "alha-vets")
 os.environ.setdefault("S3_IMAGE_BUCKET", "alha-images")
-# Mock Rekognition so classify_disease tool doesn't need real ARNs
-os.environ.setdefault("REKOGNITION_MOCK", "true")
+# Use Claude vision so classify_disease tool doesn't need real ARNs
+os.environ.setdefault("REKOGNITION_CLAUDE", "true")
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import StreamEvent

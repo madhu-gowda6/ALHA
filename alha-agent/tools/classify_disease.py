@@ -148,9 +148,9 @@ async def classify_disease(args: dict) -> dict:
 
     try:
         # Branch 1: Claude-only (mock mode / Rekognition not configured)
-        if config.rekognition_mock:
+        if config.rekognition_claude:
             log.warning(
-                "rekognition_mock_active_using_claude",
+                "rekognition_claude_active_using_claude",
                 session_id=session_id,
                 animal_type=animal_type,
                 timestamp=datetime.utcnow().isoformat() + "Z",

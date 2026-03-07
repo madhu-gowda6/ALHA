@@ -50,7 +50,7 @@ Triggers the camera/gallery overlay in Flutter. Called when visual diagnosis is 
 
 Classifies livestock disease from an uploaded S3 image. Uses a three-branch strategy:
 
-1. **Mock mode** (`REKOGNITION_MOCK=true`): Claude vision only via Bedrock.
+1. **Claude-only mode** (`REKOGNITION_CLAUDE=true`): Claude vision only via Bedrock.
 2. **Normal mode**: Rekognition Custom Labels → Claude double-check. If they disagree, Claude wins.
 3. **Rekognition error fallback**: Falls through to Claude vision.
 

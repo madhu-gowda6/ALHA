@@ -30,7 +30,7 @@ S3_IMAGE_BUCKET=alha-images
 CONSULTATIONS_TABLE=alha-consultations
 VETS_TABLE=alha-vets
 BEDROCK_KB_ID=XXXXXXXXXX                     # optional, KB must exist
-REKOGNITION_CATTLE_ARN=arn:aws:...           # optional, set REKOGNITION_MOCK=true if not available
+REKOGNITION_CATTLE_ARN=arn:aws:...           # optional, set REKOGNITION_CLAUDE=true if not available
 REKOGNITION_POULTRY_ARN=arn:aws:...          # optional
 ```
 
@@ -151,9 +151,9 @@ aws cloudfront create-invalidation --distribution-id $CF_ID --paths "/*"
      --table-name alha-disease-models \
      --item '{"animal_type":{"S":"cattle"},"model_arn":{"S":"arn:aws:rekognition:..."}}'
    ```
-3. Set `REKOGNITION_MOCK=false` in ECS task environment.
+3. Set `REKOGNITION_CLAUDE=false` in ECS task environment.
 
-If Rekognition is not configured, set `REKOGNITION_MOCK=true` — the agent falls back to Claude vision for classification.
+If Rekognition is not configured, set `REKOGNITION_CLAUDE=true` — the agent falls back to Claude vision for classification.
 
 ---
 
@@ -183,7 +183,7 @@ export CONSULTATIONS_TABLE=alha-consultations
 export VETS_TABLE=alha-vets
 export S3_IMAGE_BUCKET=alha-images
 export AWS_REGION=us-east-1
-export REKOGNITION_MOCK=true
+export REKOGNITION_CLAUDE=true
 export CLAUDE_CODE_USE_BEDROCK=1
 
 uvicorn app:app --host 0.0.0.0 --port 8000 --reload
@@ -218,7 +218,7 @@ The WebSocket will connect to `ws://localhost:8000/ws` (non-HTTPS → uses ALB_D
 
 - [ ] Remove `GET /debug/claude` endpoint before production deployment
 - [ ] Configure SNS SMS in production mode (exit sandbox, verify phone numbers or enable production access)
-- [ ] Set `REKOGNITION_MOCK=false` once Rekognition model ARNs are configured
+- [ ] Set `REKOGNITION_CLAUDE=false` once Rekognition model ARNs are configured
 - [ ] Restrict `CORS_ORIGINS` to CloudFront domain (currently `*`)
 - [ ] Replace `dynamodb:*` and `s3:*` IAM wildcards with specific resource ARNs
 - [ ] Enable DynamoDB encryption at rest (already default in AWS)
