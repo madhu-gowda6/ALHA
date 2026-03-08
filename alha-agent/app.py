@@ -39,6 +39,13 @@ _dynamodb = boto3.client("dynamodb", region_name=config.aws_region)
 # JWKS cache — refreshed on validation failure
 _jwks: Optional[dict] = None
 
+_ALLOWED_IMAGE_TYPES: dict[str, str] = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
 # In-memory conversation history keyed by session_id.
 # Each value is a list of {"role": "user"|"assistant", "content": str} dicts.
 # Capped at _MAX_HISTORY entries to avoid unbounded growth.
@@ -593,9 +600,29 @@ async def websocket_endpoint(ws: WebSocket):
 @app.post("/api/upload-url")
 async def upload_url(
     session_id: str = "",
+    content_type: str = "image/jpeg",
     authorization: Optional[str] = Header(default=None),
 ):
-    """Generate a pre-signed S3 PUT URL for image upload."""
+    """Generate a pre-signed S3 PUT URL for image upload.
+
+    Note: content_type is client-supplied and trusted for presigned URL generation.
+    Server-side format validation (magic-byte check) is not performed here; the
+    presigned URL enforces the declared ContentType only at PUT time.
+    """
+    if content_type not in _ALLOWED_IMAGE_TYPES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "UNSUPPORTED_IMAGE_TYPE",
+                    "message": f"Unsupported image type. Allowed: {', '.join(_ALLOWED_IMAGE_TYPES)}.",
+                    "message_hi": f"असमर्थित छवि प्रकार। अनुमत: {', '.join(_ALLOWED_IMAGE_TYPES)}।",
+                },
+            },
+        )
+
     # Extract session_id from Authorization header (JWT sub claim) if not provided
     if not session_id and authorization:
         try:
@@ -608,7 +635,8 @@ async def upload_url(
     if not session_id:
         session_id = str(uuid4())
 
-    s3_key = f"uploads/{session_id}/{uuid4()}.jpg"
+    ext = _ALLOWED_IMAGE_TYPES[content_type]
+    s3_key = f"uploads/{session_id}/{uuid4()}{ext}"
 
     try:
         upload_presigned_url = _s3.generate_presigned_url(
@@ -616,7 +644,7 @@ async def upload_url(
             Params={
                 "Bucket": config.s3_image_bucket,
                 "Key": s3_key,
-                "ContentType": "image/jpeg",
+                "ContentType": content_type,
             },
             ExpiresIn=900,  # 15 minutes
         )

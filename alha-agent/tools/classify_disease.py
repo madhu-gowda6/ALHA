@@ -6,7 +6,7 @@ from datetime import datetime
 
 import boto3
 import structlog
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 from claude_agent_sdk import tool
 
 from config import config
@@ -44,10 +44,74 @@ def _get_model_arn(animal_type: str) -> str:
     return config.rekognition_cattle_arn
 
 
+_EXT_TO_MEDIA_TYPE = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+_SUPPORTED_MEDIA_TYPES = set(_EXT_TO_MEDIA_TYPE.values())
+
+
+def _detect_media_type(s3_key: str, content_type: str) -> str:
+    """Resolve Claude-supported media type from S3 ContentType or key extension.
+
+    S3 may omit ContentType if the object was uploaded without the header,
+    in which case extension-based detection is used as a fallback.
+    NOTE: prefer _detect_media_type_from_bytes when image bytes are available —
+    it is more reliable than S3 metadata (which may reflect the presigned URL's
+    forced ContentType rather than the actual image format).
+    """
+    if content_type in _SUPPORTED_MEDIA_TYPES:
+        return content_type
+    # S3 ContentType absent or unrecognised — derive from key extension.
+    ext = s3_key.rsplit(".", 1)[-1].lower() if "." in s3_key else ""
+    media_type = _EXT_TO_MEDIA_TYPE.get(ext)
+    if media_type:
+        return media_type
+    log.warning(
+        "media_type_fallback_to_jpeg",
+        s3_key=s3_key,
+        content_type=content_type,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+    )
+    return "image/jpeg"
+
+
+_MAGIC_BYTES: list[tuple[bytes, str]] = [
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"RIFF", "image/webp"),   # confirmed as WebP below
+]
+
+
+def _detect_media_type_from_bytes(image_bytes: bytes) -> str | None:
+    """Detect MIME type from magic bytes. Returns None if unrecognised."""
+    for magic, media_type in _MAGIC_BYTES:
+        if image_bytes[:len(magic)] == magic:
+            if media_type == "image/webp" and image_bytes[8:12] != b"WEBP":
+                continue
+            return media_type if media_type in _SUPPORTED_MEDIA_TYPES else None
+    return None
+
+
 async def _claude_classify_image(s3_key: str, animal_type: str) -> dict:
     """Classify livestock disease from S3 image using Claude vision via Bedrock."""
     obj = _s3.get_object(Bucket=config.s3_image_bucket, Key=s3_key)
+    media_type = _detect_media_type(s3_key, obj.get("ContentType", ""))
+    if media_type == "image/gif":
+        log.warning(
+            "gif_upload_first_frame_only",
+            s3_key=s3_key,
+            note="Bedrock analyses only the first frame of animated GIFs",
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
     image_bytes = obj["Body"].read()
+    media_type = _detect_media_type_from_bytes(image_bytes) or media_type
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
 
     prompt = (
@@ -64,7 +128,7 @@ async def _claude_classify_image(s3_key: str, animal_type: str) -> dict:
             "role": "user",
             "content": [
                 {"type": "image", "source": {
-                    "type": "base64", "media_type": "image/jpeg", "data": b64_data,
+                    "type": "base64", "media_type": media_type, "data": b64_data,
                 }},
                 {"type": "text", "text": prompt},
             ],
@@ -147,7 +211,7 @@ async def classify_disease(args: dict) -> dict:
     start_time = datetime.utcnow()
 
     try:
-        # Branch 1: Claude-only (mock mode / Rekognition not configured)
+        # Branch 1: Claude-only (claude mode / Rekognition not configured)
         if config.rekognition_claude:
             log.warning(
                 "rekognition_claude_active_using_claude",
@@ -176,6 +240,16 @@ async def classify_disease(args: dict) -> dict:
 
         else:
             # Branch 2: Rekognition + Claude double-check
+            _rek_ext = s3_image_key.rsplit(".", 1)[-1].lower() if "." in s3_image_key else ""
+            if _rek_ext not in ("jpg", "jpeg", "png"):
+                log.warning(
+                    "rekognition_unsupported_format",
+                    session_id=session_id,
+                    s3_key=s3_image_key,
+                    ext=_rek_ext,
+                    note="Rekognition supports JPEG/PNG only; expect ClientError fallback to Claude",
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                )
             model_arn = _get_model_arn(animal_type)
             response = _rekognition.detect_custom_labels(
                 ProjectVersionArn=model_arn,
@@ -227,10 +301,10 @@ async def classify_disease(args: dict) -> dict:
                     result = {"disease": rek_disease, "confidence": rek_confidence,
                               "bbox": rek_bbox, "source": "rekognition"}
 
-    except ClientError as exc:
-        # Branch 3: Rekognition errored — fall through to Claude
+    except (ClientError, ParamValidationError) as exc:
+        # Branch 3: Rekognition errored or ARN failed param validation — fall through to Claude
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-        code = exc.response.get("Error", {}).get("Code", "Unknown")
+        code = exc.response.get("Error", {}).get("Code", "Unknown") if isinstance(exc, ClientError) else type(exc).__name__
         log.warning(
             "rekognition_error_claude_fallback",
             session_id=session_id,

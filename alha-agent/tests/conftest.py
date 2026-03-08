@@ -1,7 +1,15 @@
 import os
 import sys
+from unittest.mock import MagicMock
 
 import pytest
+
+# Stub amazon_transcribe before any module import — it's not installed in the test venv.
+_amazon_transcribe_stub = MagicMock()
+sys.modules.setdefault("amazon_transcribe", _amazon_transcribe_stub)
+sys.modules.setdefault("amazon_transcribe.client", _amazon_transcribe_stub)
+sys.modules.setdefault("amazon_transcribe.handlers", _amazon_transcribe_stub)
+sys.modules.setdefault("amazon_transcribe.model", _amazon_transcribe_stub)
 
 # Set required env vars at module level so Config() succeeds at import time
 os.environ.setdefault("AWS_REGION", "us-east-1")
